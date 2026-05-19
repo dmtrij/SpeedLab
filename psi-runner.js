@@ -6,6 +6,13 @@ const runtimePaths = require("./runtime-paths");
 
 const PSI_ENDPOINT = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed";
 
+function buildCacheBustedTestUrl(url, runIndex) {
+  const parsedUrl = new URL(url);
+  const token = `${Date.now().toString(36)}-${runIndex}-${Math.random().toString(36).slice(2, 8)}`;
+  parsedUrl.searchParams.set("speedlab_psi_run", token);
+  return parsedUrl.toString();
+}
+
 function buildPsiUrl(url, device, apiKey) {
   const params = new URLSearchParams({
     url,
@@ -18,6 +25,18 @@ function buildPsiUrl(url, device, apiKey) {
   }
 
   return `${PSI_ENDPOINT}?${params.toString()}`;
+}
+
+function metricSignature(metrics = {}) {
+  return [
+    metrics.score,
+    metrics.fcp,
+    metrics.lcp,
+    metrics.si,
+    metrics.tbt,
+    metrics.cls,
+    metrics.ttfb
+  ].map((value) => value == null ? "" : String(value)).join("|");
 }
 
 function getFetchTimeoutSignal(timeoutMs) {
@@ -62,14 +81,14 @@ function formatPsiError(status, payload, fallbackText) {
   const apiMessage = payload?.error?.message || payload?.lighthouseResult?.runtimeError?.message || fallbackText;
 
   if (status === 429) {
-    return "Достигнут лимит Google PSI API. Добавь ключ PSI API или повтори попытку позже.";
+    return "Google PSI API limit reached. Add a PSI API key or retry later.";
   }
 
   if (status === 403) {
-    return apiMessage || "Google PSI API отклонил запрос. Проверь ключ или квоту.";
+    return apiMessage || "Google PSI API rejected the request. Check the key or quota.";
   }
 
-  return apiMessage || `Запрос к Google PSI API завершился ошибкой со статусом ${status}.`;
+  return apiMessage || `Google PSI API request failed with status ${status}.`;
 }
 
 async function runSinglePsi(url, device, apiKey, signal) {
@@ -109,13 +128,32 @@ async function runSinglePsi(url, device, apiKey, signal) {
   }
 
   if (!payload?.lighthouseResult) {
-    throw new Error("Ответ Google PSI API не содержит lighthouseResult.");
+    throw new Error("Google PSI API response does not contain lighthouseResult.");
   }
 
   return {
     reportJson: JSON.stringify(payload, null, 2),
-    metrics: extractMetrics(payload.lighthouseResult)
+    metrics: extractMetrics(payload.lighthouseResult),
+    testedUrl: url
   };
+}
+
+async function runPsiAttempt({ url, device, apiKey, testController }) {
+  const runAbortController = new AbortController();
+  const releaseCancel = testController?.onCancel(() => {
+    runAbortController.abort();
+  });
+
+  try {
+    return await runSinglePsi(url, device, apiKey, runAbortController.signal);
+  } catch (error) {
+    if (testController?.cancelled) {
+      throw createCancelledError(testController.reason);
+    }
+    throw error;
+  } finally {
+    releaseCancel?.();
+  }
 }
 
 async function runPsiSequence({
@@ -133,13 +171,13 @@ async function runPsiSequence({
   await fs.mkdir(resultsDir, { recursive: true });
 
   if (!apiKey) {
-    onLog?.("Ключ PSI API не передан. Используются неавторизованные запросы к Google PSI API.");
+    onLog?.("No PSI API key was provided. Unauthenticated Google PSI API requests are used.");
   }
 
   const savedRuns = [];
 
   if (runs > 1) {
-    onLog?.("PSI-серия повторяет один и тот же исходный URL без добавления служебных query-параметров. Google может вернуть одинаковый лабораторный снимок.");
+    onLog?.("PSI series starts with the original URL. If Google returns an identical lab snapshot, SpeedLab retries that run with a speedlab_psi_run cache-busting query parameter.");
   }
 
   for (let runIndex = 1; runIndex <= runs; runIndex += 1) {
@@ -147,22 +185,32 @@ async function runPsiSequence({
     onMainRunStart?.({ runIndex });
     onLog?.(`PSI run ${runIndex}/${runs} started for URL: ${url}`);
 
-    const runAbortController = new AbortController();
-    const releaseCancel = testController?.onCancel(() => {
-      runAbortController.abort();
+    let { reportJson, metrics, testedUrl } = await runPsiAttempt({
+      url,
+      device,
+      apiKey,
+      testController
     });
 
-    let reportJson;
-    let metrics;
-    try {
-      ({ reportJson, metrics } = await runSinglePsi(url, device, apiKey, runAbortController.signal));
-    } catch (error) {
-      if (testController?.cancelled) {
-        throw createCancelledError(testController.reason);
+    const signature = metricSignature(metrics);
+    const duplicateOf = savedRuns.find((run) => metricSignature(run) === signature);
+    if (runs > 1 && duplicateOf) {
+      throwIfCancelled(testController);
+      const retryUrl = buildCacheBustedTestUrl(url, runIndex);
+      onLog?.(`PSI run ${runIndex}/${runs} duplicated run #${duplicateOf.runIndex}. Retrying with cache-busting URL: ${retryUrl}`);
+
+      ({ reportJson, metrics, testedUrl } = await runPsiAttempt({
+        url: retryUrl,
+        device,
+        apiKey,
+        testController
+      }));
+
+      if (metricSignature(metrics) === signature) {
+        onLog?.(`PSI run ${runIndex}/${runs} is still a duplicate after cache-busting. Saving Google's response as returned.`);
+      } else {
+        onLog?.(`PSI run ${runIndex}/${runs} returned a separate result after cache-busting.`);
       }
-      throw error;
-    } finally {
-      releaseCancel?.();
     }
 
     throwIfCancelled(testController);
@@ -180,12 +228,15 @@ async function runPsiSequence({
 
     savedRuns.push(runResult);
     onRunComplete?.(runResult);
-    onLog?.(`PSI-прогон ${runIndex}/${runs} сохранен в ${publicPath}.`);
+    onLog?.(`PSI run ${runIndex}/${runs} saved to ${publicPath}. Tested URL: ${testedUrl}`);
   }
 
   return savedRuns;
 }
 
 module.exports = {
+  buildCacheBustedTestUrl,
+  buildPsiUrl,
+  metricSignature,
   runPsiSequence
 };

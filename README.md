@@ -15,7 +15,7 @@ SpeedLab is a local web app for repeatable Lighthouse performance checks. It ope
   Calls the official PageSpeed Insights API and stores the full API response JSON for each run.
 
 SpeedLab keeps local and PSI history separate for comparisons so the verdict is not polluted by mixing two different test environments.
-For repeated PSI runs, SpeedLab re-requests the same original URL and does not append service query parameters like `speedlab_run`. This avoids changing cache keys, routing, and SSR behavior on the tested site, but Google can still return the same laboratory snapshot more than once.
+For repeated PSI runs, SpeedLab starts with the original URL. If Google returns an identical lab snapshot, SpeedLab retries that run with a `speedlab_psi_run` cache-busting query parameter so the series is less likely to collapse into cached duplicates.
 
 ## Requirements
 
@@ -121,7 +121,7 @@ The UI will show:
 
 If another test is already running, the next launch is added to the queue instead of failing.
 You can cancel queued or active tests from the UI, and retry a finished test with the same settings.
-If you run PSI with more than one request, treat it as a consistency check rather than a true cache-busting series: SpeedLab will show how many unique results Google actually returned.
+If you run PSI with more than one request, SpeedLab will still mark any duplicate snapshots, but it now retries exact duplicates with a cache-busting URL before saving the run.
 
 ## History and detail routes
 
