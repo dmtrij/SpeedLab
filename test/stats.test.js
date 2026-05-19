@@ -1,11 +1,15 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const runtimePaths = require("../runtime-paths");
 
 const {
   computeMetricStats,
   extractMetrics,
   compareTests,
-  selectRepresentativeRun
+  selectRepresentativeRun,
+  extractAssetPayloadFromReports
 } = require("../stats");
 
 test("computeMetricStats calculates medians and spread from numeric series", () => {
@@ -94,4 +98,108 @@ test("selectRepresentativeRun picks the closest score and then lowest run index"
   ], 90);
 
   assert.deepEqual(tied, { runIndex: 2, score: 90 });
+});
+
+test("extractAssetPayloadFromReports aggregates CSS and JS network payload", () => {
+  runtimePaths.prepareRuntimePaths();
+  const fixtureDir = path.join(runtimePaths.resultsDir, "stats-payload-fixture");
+  const fixturePath = path.join(fixtureDir, "run-1.json");
+  fs.mkdirSync(fixtureDir, { recursive: true });
+
+  fs.writeFileSync(fixturePath, JSON.stringify({
+    finalUrl: "https://site.test/",
+    audits: {
+      "network-requests": {
+        details: {
+          items: [
+            {
+              url: "https://site.test/wp-content/plugins/royal/assets/frontend.css?ver=1",
+              transferSize: 10000,
+              resourceSize: 40000,
+              resourceType: "Stylesheet",
+              mimeType: "text/css",
+              priority: "VeryHigh",
+              networkRequestTime: 10,
+              networkEndTime: 30
+            },
+            {
+              url: "https://site.test/wp-content/uploads/elementor/css/post-2.css?ver=1",
+              transferSize: 5000,
+              resourceSize: 9000,
+              resourceType: "Stylesheet",
+              mimeType: "text/css",
+              priority: "High",
+              networkRequestTime: 12,
+              networkEndTime: 28
+            },
+            {
+              url: "https://cdn.test/widget.js",
+              transferSize: 7000,
+              resourceSize: 20000,
+              resourceType: "Script",
+              mimeType: "application/javascript",
+              priority: "Low",
+              networkRequestTime: 20,
+              networkEndTime: 45
+            }
+          ]
+        }
+      },
+      "render-blocking-insight": {
+        details: {
+          items: [
+            {
+              url: "https://site.test/wp-content/plugins/royal/assets/frontend.css?ver=1",
+              totalBytes: 10000,
+              wastedMs: 1200
+            }
+          ]
+        }
+      },
+      "unused-css-rules": {
+        details: {
+          items: [
+            {
+              url: "https://site.test/wp-content/plugins/royal/assets/frontend.css?ver=1",
+              totalBytes: 40000,
+              wastedBytes: 6000,
+              wastedPercent: 60
+            }
+          ]
+        }
+      },
+      "unused-javascript": {
+        details: {
+          items: [
+            {
+              url: "https://cdn.test/widget.js",
+              totalBytes: 20000,
+              wastedBytes: 3000,
+              wastedPercent: 15
+            }
+          ]
+        }
+      }
+    }
+  }));
+
+  try {
+    const report = extractAssetPayloadFromReports(["/results/stats-payload-fixture/run-1.json"]);
+
+    assert.equal(report.summary.reportCount, 1);
+    assert.equal(report.summary.assetCount, 3);
+    assert.equal(report.summary.css.count, 2);
+    assert.equal(report.summary.css.transferBytes, 15000);
+    assert.equal(report.summary.css.renderBlockingCount, 1);
+    assert.equal(report.summary.js.count, 1);
+    assert.equal(report.summary.js.thirdPartyBytes, 7000);
+    assert.equal(report.summary.totalUnusedBytes, 9000);
+    assert.equal(report.css[0].sourceType, "plugin");
+    assert.equal(report.css[0].sourceName, "royal");
+    assert.equal(report.css[0].renderBlockingReports, 1);
+    assert.equal(report.js[0].sourceType, "third-party");
+    assert.ok(report.groups.some((group) => group.sourceType === "elementor" && group.cssCount === 1));
+  } finally {
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+  }
 });

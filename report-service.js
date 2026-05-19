@@ -8,6 +8,7 @@ const {
   selectRepresentativeRun,
   extractDiagnosticsFromReports,
   extractReportContext,
+  extractAssetPayloadFromReports,
   extractResourceOffendersFromReports
 } = require("./stats");
 
@@ -52,6 +53,7 @@ function buildTestResponse(testId, baselineId = null) {
     ? extractReportContext(representativeRun.json_path)
     : {};
   const resourceOffenders = extractResourceOffendersFromReports(reportPaths);
+  const assetPayloadReport = extractAssetPayloadFromReports(reportPaths);
   const optimizationReport = buildOptimizationReportFromReports(reportPaths);
   const queuePosition = test.status === "pending" ? db.getPendingPosition(test.id) : null;
 
@@ -75,6 +77,7 @@ function buildTestResponse(testId, baselineId = null) {
     baseline: previous ? testDomain.serializeTest(previous) : null,
     diagnostics,
     resourceOffenders,
+    assetPayloadReport,
     optimizationReport,
     reportContext,
     queue: {
@@ -171,6 +174,83 @@ function formatOptimizationMarkdown(optimizationReport = {}) {
   ];
 }
 
+function formatBytes(value) {
+  if (value == null) {
+    return "-";
+  }
+
+  if (value >= 1024 * 1024) {
+    return `${(value / 1024 / 1024).toFixed(2)} MB`;
+  }
+
+  return `${Math.round(value / 1024)} KiB`;
+}
+
+function formatSourceLabel(item = {}) {
+  switch (item.sourceType) {
+    case "plugin":
+      return `Plugin: ${item.sourceName}`;
+    case "theme":
+      return `Theme: ${item.sourceName}`;
+    case "elementor":
+      return "Elementor generated CSS";
+    case "wordpress-core":
+      return "WordPress core";
+    case "uploads":
+      return "Uploads";
+    case "third-party":
+      return `Third-party: ${item.sourceName}`;
+    default:
+      return item.sourceName || item.sourceType || "-";
+  }
+}
+
+function formatAssetPayloadMarkdown(assetPayloadReport = {}) {
+  const summary = assetPayloadReport.summary || {};
+  const groups = assetPayloadReport.groups || [];
+  const css = assetPayloadReport.css || [];
+  const js = assetPayloadReport.js || [];
+
+  if (!summary.assetCount) {
+    return [
+      "## CSS/JS payload",
+      "",
+      "No full CSS/JS network payload data was found."
+    ];
+  }
+
+  const assetLine = (item, index) => {
+    const flags = [
+      item.renderBlockingReports ? `render-blocking ${item.renderBlockingReports}/${item.totalReports}` : "",
+      item.unusedBytes ? `unused ${formatBytes(item.unusedBytes)}` : ""
+    ].filter(Boolean).join(", ");
+
+    return `${index + 1}. ${item.url} - ${formatBytes(item.transferBytes)} transfer / ${formatBytes(item.resourceBytes)} raw / ${formatSourceLabel(item)}${flags ? ` / ${flags}` : ""}`;
+  };
+
+  return [
+    "## CSS/JS payload",
+    "",
+    `Reports analyzed: ${summary.reportCount}`,
+    `CSS: ${summary.css?.count || 0} files / ${formatBytes(summary.css?.transferBytes)} transfer / ${summary.css?.renderBlockingCount || 0} render-blocking`,
+    `JS: ${summary.js?.count || 0} files / ${formatBytes(summary.js?.transferBytes)} transfer / ${summary.js?.renderBlockingCount || 0} render-blocking`,
+    `Known unused CSS/JS: ${formatBytes(summary.totalUnusedBytes)}`,
+    "",
+    "### Sources",
+    "| Source | CSS | JS | Transfer | Raw | Unused | Blocking |",
+    "|---|---:|---:|---:|---:|---:|---:|",
+    ...groups.slice(0, 12).map((group) =>
+      `| ${formatSourceLabel(group)} | ${group.cssCount} | ${group.jsCount} | ${formatBytes(group.totalTransferBytes)} | ${formatBytes(group.totalResourceBytes)} | ${formatBytes(group.unusedBytes)} | ${group.renderBlockingCount} |`
+    ),
+    "",
+    "### Heaviest CSS",
+    ...css.slice(0, 10).map(assetLine),
+    "",
+    "### Heaviest JS",
+    ...js.slice(0, 10).map(assetLine)
+  ];
+}
+
 function buildMarkdownReport(testId) {
   const details = buildTestResponse(testId);
   if (!details) {
@@ -210,6 +290,8 @@ function buildMarkdownReport(testId) {
     }),
     "",
     ...formatOptimizationMarkdown(details.optimizationReport),
+    "",
+    ...formatAssetPayloadMarkdown(details.assetPayloadReport),
     "",
     "## Что чинить первым",
     ...details.diagnostics.slice(0, 8).flatMap((item, index) => [

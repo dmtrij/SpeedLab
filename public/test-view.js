@@ -857,6 +857,141 @@
       `;
     }
 
+    function assetSourceLabel(item = {}) {
+      switch (item.sourceType) {
+        case "plugin":
+          return `Plugin: ${item.sourceName}`;
+        case "theme":
+          return `Theme: ${item.sourceName}`;
+        case "elementor":
+          return "Elementor generated";
+        case "wordpress-core":
+          return "WordPress core";
+        case "uploads":
+          return "Uploads";
+        case "third-party":
+          return `Third-party: ${item.sourceName}`;
+        default:
+          return item.sourceName || item.sourceType || "-";
+      }
+    }
+
+    function renderAssetBadges(asset) {
+      const badges = [
+        asset.renderBlockingReports
+          ? `<span class="asset-badge bad">render-blocking ${asset.renderBlockingReports}/${asset.totalReports}</span>`
+          : "",
+        asset.unusedBytes
+          ? `<span class="asset-badge warn">unused ${escapeHtml(bytesLabel(asset.unusedBytes))}</span>`
+          : "",
+        asset.priority
+          ? `<span class="asset-badge neutral">${escapeHtml(asset.priority)}</span>`
+          : ""
+      ].filter(Boolean);
+
+      return badges.length ? `<div class="asset-payload-badges">${badges.join("")}</div>` : "";
+    }
+
+    function renderAssetList(title, assets) {
+      if (!assets?.length) {
+        return `
+          <article class="asset-payload-card">
+            <h4>${escapeHtml(title)}</h4>
+            <p>${UI.noData}</p>
+          </article>
+        `;
+      }
+
+      return `
+        <article class="asset-payload-card">
+          <h4>${escapeHtml(title)}</h4>
+          <ol class="asset-payload-list">
+            ${assets.slice(0, 12).map((asset) => `
+              <li class="asset-payload-item">
+                <div class="asset-payload-main">
+                  <strong title="${escapeHtml(asset.url)}">${escapeHtml(asset.fileName || asset.url)}</strong>
+                  <span>${escapeHtml(assetSourceLabel(asset))}</span>
+                  <small>${escapeHtml(asset.url)}</small>
+                  ${renderAssetBadges(asset)}
+                </div>
+                <div class="asset-payload-size">
+                  <strong>${escapeHtml(bytesLabel(asset.transferBytes))}</strong>
+                  <span>raw ${escapeHtml(bytesLabel(asset.resourceBytes))}</span>
+                  <span>${asset.reportsSeen}/${asset.totalReports}</span>
+                </div>
+              </li>
+            `).join("")}
+          </ol>
+        </article>
+      `;
+    }
+
+    function renderAssetPayloadReport(payloadReport) {
+      const summary = payloadReport?.summary || {};
+      const groups = payloadReport?.groups || [];
+
+      if (!summary.assetCount) {
+        return `
+          <section class="info-section payload-report">
+            <div class="info-section-head">
+              <h3>CSS/JS payload</h3>
+              <span>network-requests</span>
+            </div>
+            <p>${UI.noData}</p>
+          </section>
+        `;
+      }
+
+      return `
+        <section class="info-section payload-report">
+          <div class="info-section-head">
+            <h3>CSS/JS payload</h3>
+            <span>\u043f\u043e\u043b\u043d\u044b\u0439 \u0441\u0440\u0435\u0437 \u0441\u0442\u0438\u043b\u0435\u0439 \u0438 \u0441\u043a\u0440\u0438\u043f\u0442\u043e\u0432</span>
+          </div>
+          <div class="compact-summary-strip payload-summary-strip">
+            <div><span>CSS transfer</span><strong>${escapeHtml(summary.css?.count || 0)} / ${escapeHtml(bytesLabel(summary.css?.transferBytes))}</strong></div>
+            <div><span>JS transfer</span><strong>${escapeHtml(summary.js?.count || 0)} / ${escapeHtml(bytesLabel(summary.js?.transferBytes))}</strong></div>
+            <div><span>Render-blocking</span><strong>${escapeHtml(summary.renderBlockingCount || 0)}</strong></div>
+            <div><span>Unused known</span><strong>${escapeHtml(bytesLabel(summary.totalUnusedBytes))}</strong></div>
+            <div><span>Third-party</span><strong>${escapeHtml(bytesLabel((summary.css?.thirdPartyBytes || 0) + (summary.js?.thirdPartyBytes || 0)))}</strong></div>
+            <div><span>\u0424\u0430\u0439\u043b\u043e\u0432</span><strong>${escapeHtml(summary.assetCount)} / ${escapeHtml(summary.reportCount)} reports</strong></div>
+          </div>
+          <div class="table-wrap asset-group-wrap">
+            <table class="data-table asset-group-table">
+              <thead>
+                <tr>
+                  <th>\u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a</th>
+                  <th>CSS</th>
+                  <th>JS</th>
+                  <th>Transfer</th>
+                  <th>Raw</th>
+                  <th>Unused</th>
+                  <th>Blocking</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${groups.slice(0, 16).map((group) => `
+                  <tr>
+                    <td class="table-url">${escapeHtml(assetSourceLabel(group))}</td>
+                    <td>${escapeHtml(group.cssCount)} / ${escapeHtml(bytesLabel(group.cssTransferBytes))}</td>
+                    <td>${escapeHtml(group.jsCount)} / ${escapeHtml(bytesLabel(group.jsTransferBytes))}</td>
+                    <td>${escapeHtml(bytesLabel(group.totalTransferBytes))}</td>
+                    <td>${escapeHtml(bytesLabel(group.totalResourceBytes))}</td>
+                    <td>${escapeHtml(bytesLabel(group.unusedBytes))}</td>
+                    <td>${escapeHtml(group.renderBlockingCount)}</td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+          <div class="asset-payload-grid">
+            ${renderAssetList("\u0421\u0430\u043c\u044b\u0435 \u0442\u044f\u0436\u0435\u043b\u044b\u0435 CSS", payloadReport.css)}
+            ${renderAssetList("\u0421\u0430\u043c\u044b\u0435 \u0442\u044f\u0436\u0435\u043b\u044b\u0435 JS", payloadReport.js)}
+          </div>
+        </section>
+      `;
+    }
+
     function renderStability(metricStats, runs) {
       const scoreSpread = metricStats.score?.spread;
       const lcpSpread = metricStats.lcp?.spread;
@@ -1156,7 +1291,7 @@
     }
 
     function renderTestDetail(details, runs) {
-      const { test, progress, metricStats, comparison, diagnostics, resourceOffenders, optimizationReport, reportContext, queue } = details;
+      const { test, progress, metricStats, comparison, diagnostics, resourceOffenders, assetPayloadReport, optimizationReport, reportContext, queue } = details;
       const insight = buildInsight(test, runs, comparison);
       const uniqueRuns = uniqueRunCount(runs);
       const runCount = getRequestedRunCount(test);
@@ -1215,6 +1350,12 @@
             <summary>План оптимизации</summary>
             <div class="accordion-body">
               ${renderOptimizationReport(optimizationReport)}
+            </div>
+          </details>
+          <details open class="panel accordion">
+            <summary>CSS/JS payload</summary>
+            <div class="accordion-body">
+              ${renderAssetPayloadReport(assetPayloadReport)}
             </div>
           </details>
           <details open class="panel accordion">

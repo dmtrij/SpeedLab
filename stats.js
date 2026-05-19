@@ -363,6 +363,422 @@ function pluginNameFromUrl(url) {
   return "";
 }
 
+function numberOrZero(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function parseUrl(value) {
+  try {
+    return new URL(String(value || ""));
+  } catch {
+    return null;
+  }
+}
+
+function normalizeAssetUrl(url) {
+  const parsed = parseUrl(url);
+  if (!parsed) {
+    return String(url || "");
+  }
+
+  parsed.hash = "";
+  return parsed.toString();
+}
+
+function resourceUrlFromItem(item = {}) {
+  return item.url || item.source?.url || item.request?.url || "";
+}
+
+function assetTypeFromNetworkItem(item = {}) {
+  const url = String(item.url || "").toLowerCase();
+  const resourceType = String(item.resourceType || "").toLowerCase();
+  const mimeType = String(item.mimeType || "").toLowerCase();
+
+  if (resourceType === "stylesheet" || mimeType.includes("text/css") || /\.css(?:[?#]|$)/.test(url)) {
+    return "css";
+  }
+
+  if (resourceType === "script" || mimeType.includes("javascript") || /\.m?js(?:[?#]|$)/.test(url)) {
+    return "js";
+  }
+
+  return null;
+}
+
+function pageOriginFromReport(lhr = {}) {
+  const parsed = parseUrl(lhr.finalDisplayedUrl || lhr.finalUrl || lhr.requestedUrl || "");
+  return parsed?.origin || "";
+}
+
+function classifyAssetSource(url, pageOrigin = "") {
+  const parsed = parseUrl(url);
+  const pathname = parsed?.pathname || String(url || "");
+  const origin = parsed?.origin || "";
+  const hostname = parsed?.hostname || "";
+
+  if (parsed && pageOrigin && origin && origin !== pageOrigin) {
+    return {
+      sourceType: "third-party",
+      sourceName: hostname,
+      sourceKey: `third-party:${hostname}`
+    };
+  }
+
+  const pluginMatch = pathname.match(/\/wp-content\/plugins\/([^/]+)/i);
+  const themeMatch = pathname.match(/\/wp-content\/themes\/([^/]+)/i);
+
+  if (/\/wp-content\/uploads\/elementor\//i.test(pathname)) {
+    return {
+      sourceType: "elementor",
+      sourceName: "Elementor uploads",
+      sourceKey: "elementor:uploads"
+    };
+  }
+
+  if (pluginMatch) {
+    return {
+      sourceType: "plugin",
+      sourceName: pluginMatch[1],
+      sourceKey: `plugin:${pluginMatch[1]}`
+    };
+  }
+
+  if (themeMatch) {
+    return {
+      sourceType: "theme",
+      sourceName: themeMatch[1],
+      sourceKey: `theme:${themeMatch[1]}`
+    };
+  }
+
+  if (/\/wp-includes\/|\/wp-admin\//i.test(pathname)) {
+    return {
+      sourceType: "wordpress-core",
+      sourceName: "WordPress core",
+      sourceKey: "wordpress-core"
+    };
+  }
+
+  if (/\/wp-content\/uploads\//i.test(pathname)) {
+    return {
+      sourceType: "uploads",
+      sourceName: "Uploads",
+      sourceKey: "uploads"
+    };
+  }
+
+  return {
+    sourceType: "first-party",
+    sourceName: hostname || "First-party",
+    sourceKey: `first-party:${hostname || "site"}`
+  };
+}
+
+function assetFileName(url) {
+  const parsed = parseUrl(url);
+  const pathname = parsed?.pathname || String(url || "");
+  const fileName = pathname.split("/").filter(Boolean).pop() || parsed?.hostname || url || "-";
+
+  try {
+    return decodeURIComponent(fileName);
+  } catch {
+    return fileName;
+  }
+}
+
+function collectAuditResourceMetrics(audits = {}, auditIds = []) {
+  const metrics = new Map();
+
+  auditIds.forEach((auditId) => {
+    const items = Array.isArray(audits[auditId]?.details?.items)
+      ? audits[auditId].details.items
+      : [];
+
+    items.forEach((item) => {
+      const url = resourceUrlFromItem(item);
+      if (!url) {
+        return;
+      }
+
+      const key = normalizeAssetUrl(url);
+      const existing = metrics.get(key) || {
+        occurrences: 0,
+        wastedMs: 0,
+        wastedBytes: 0,
+        totalBytes: 0,
+        wastedPercent: 0
+      };
+
+      existing.occurrences += 1;
+      existing.wastedMs = Math.max(existing.wastedMs, numberOrZero(item.wastedMs));
+      existing.wastedBytes = Math.max(existing.wastedBytes, numberOrZero(item.wastedBytes));
+      existing.totalBytes = Math.max(existing.totalBytes, numberOrZero(item.totalBytes));
+      existing.wastedPercent = Math.max(existing.wastedPercent, numberOrZero(item.wastedPercent));
+      metrics.set(key, existing);
+    });
+  });
+
+  return metrics;
+}
+
+function emptyAssetPayloadReport(reportCount = 0) {
+  return {
+    summary: {
+      reportCount,
+      assetCount: 0,
+      totalTransferBytes: 0,
+      totalResourceBytes: 0,
+      totalUnusedBytes: 0,
+      renderBlockingCount: 0,
+      css: {
+        count: 0,
+        transferBytes: 0,
+        resourceBytes: 0,
+        unusedBytes: 0,
+        renderBlockingCount: 0,
+        thirdPartyBytes: 0
+      },
+      js: {
+        count: 0,
+        transferBytes: 0,
+        resourceBytes: 0,
+        unusedBytes: 0,
+        renderBlockingCount: 0,
+        thirdPartyBytes: 0
+      }
+    },
+    groups: [],
+    css: [],
+    js: []
+  };
+}
+
+function roundByteValue(value) {
+  return Math.max(0, Math.round(numberOrZero(value)));
+}
+
+function finalizeAssetRecord(record, totalReports) {
+  const sampleCount = Math.max(1, record.sampleCount);
+  const priority = [...record.priorities.entries()]
+    .sort((left, right) => right[1] - left[1])[0]?.[0] || null;
+
+  return {
+    url: record.url,
+    fileName: assetFileName(record.url),
+    type: record.type,
+    sourceType: record.sourceType,
+    sourceName: record.sourceName,
+    sourceKey: record.sourceKey,
+    occurrences: record.occurrences,
+    reportsSeen: record.reports.size,
+    totalReports,
+    transferBytes: roundByteValue(record.maxTransferBytes),
+    resourceBytes: roundByteValue(record.maxResourceBytes),
+    avgTransferBytes: roundByteValue(record.transferBytesTotal / sampleCount),
+    avgResourceBytes: roundByteValue(record.resourceBytesTotal / sampleCount),
+    unusedBytes: roundByteValue(record.unusedBytes),
+    unusedPercent: toNumber(record.unusedPercent, 1) || 0,
+    renderBlockingMs: roundByteValue(record.renderBlockingMs),
+    renderBlockingReports: record.renderBlockingReports,
+    firstRequestTimeMs: record.firstRequestTimeMs == null ? null : toNumber(record.firstRequestTimeMs, 1),
+    lastEndTimeMs: record.lastEndTimeMs == null ? null : toNumber(record.lastEndTimeMs, 1),
+    priority
+  };
+}
+
+function buildAssetGroups(assets = []) {
+  const groups = new Map();
+
+  assets.forEach((asset) => {
+    const group = groups.get(asset.sourceKey) || {
+      sourceKey: asset.sourceKey,
+      sourceType: asset.sourceType,
+      sourceName: asset.sourceName,
+      assetCount: 0,
+      cssCount: 0,
+      jsCount: 0,
+      cssTransferBytes: 0,
+      jsTransferBytes: 0,
+      totalTransferBytes: 0,
+      totalResourceBytes: 0,
+      unusedBytes: 0,
+      renderBlockingCount: 0
+    };
+
+    group.assetCount += 1;
+    group.cssCount += asset.type === "css" ? 1 : 0;
+    group.jsCount += asset.type === "js" ? 1 : 0;
+    group.cssTransferBytes += asset.type === "css" ? asset.transferBytes : 0;
+    group.jsTransferBytes += asset.type === "js" ? asset.transferBytes : 0;
+    group.totalTransferBytes += asset.transferBytes;
+    group.totalResourceBytes += asset.resourceBytes;
+    group.unusedBytes += asset.unusedBytes;
+    group.renderBlockingCount += asset.renderBlockingReports > 0 ? 1 : 0;
+    groups.set(asset.sourceKey, group);
+  });
+
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      cssTransferBytes: roundByteValue(group.cssTransferBytes),
+      jsTransferBytes: roundByteValue(group.jsTransferBytes),
+      totalTransferBytes: roundByteValue(group.totalTransferBytes),
+      totalResourceBytes: roundByteValue(group.totalResourceBytes),
+      unusedBytes: roundByteValue(group.unusedBytes)
+    }))
+    .sort((left, right) =>
+      (right.totalTransferBytes - left.totalTransferBytes) ||
+      (right.renderBlockingCount - left.renderBlockingCount) ||
+      String(left.sourceName).localeCompare(String(right.sourceName))
+    )
+    .slice(0, 24);
+}
+
+function summarizeAssets(assets = [], reportCount = 0) {
+  const report = emptyAssetPayloadReport(reportCount);
+
+  assets.forEach((asset) => {
+    const bucket = report.summary[asset.type];
+    bucket.count += 1;
+    bucket.transferBytes += asset.transferBytes;
+    bucket.resourceBytes += asset.resourceBytes;
+    bucket.unusedBytes += asset.unusedBytes;
+    bucket.renderBlockingCount += asset.renderBlockingReports > 0 ? 1 : 0;
+    bucket.thirdPartyBytes += asset.sourceType === "third-party" ? asset.transferBytes : 0;
+  });
+
+  ["css", "js"].forEach((type) => {
+    report.summary[type].transferBytes = roundByteValue(report.summary[type].transferBytes);
+    report.summary[type].resourceBytes = roundByteValue(report.summary[type].resourceBytes);
+    report.summary[type].unusedBytes = roundByteValue(report.summary[type].unusedBytes);
+    report.summary[type].thirdPartyBytes = roundByteValue(report.summary[type].thirdPartyBytes);
+  });
+
+  report.summary.assetCount = assets.length;
+  report.summary.totalTransferBytes = roundByteValue(report.summary.css.transferBytes + report.summary.js.transferBytes);
+  report.summary.totalResourceBytes = roundByteValue(report.summary.css.resourceBytes + report.summary.js.resourceBytes);
+  report.summary.totalUnusedBytes = roundByteValue(report.summary.css.unusedBytes + report.summary.js.unusedBytes);
+  report.summary.renderBlockingCount = report.summary.css.renderBlockingCount + report.summary.js.renderBlockingCount;
+  report.groups = buildAssetGroups(assets);
+  report.css = assets.filter((asset) => asset.type === "css").slice(0, 50);
+  report.js = assets.filter((asset) => asset.type === "js").slice(0, 50);
+
+  return report;
+}
+
+function extractAssetPayloadFromReports(reportPaths = []) {
+  const reports = reportPaths
+    .map((reportPath) => readReport(reportPath))
+    .filter(Boolean);
+
+  if (!reports.length) {
+    return emptyAssetPayloadReport(0);
+  }
+
+  const assets = new Map();
+
+  reports.forEach((lhr, reportIndex) => {
+    const audits = lhr.audits || {};
+    const pageOrigin = pageOriginFromReport(lhr);
+    const networkItems = Array.isArray(audits["network-requests"]?.details?.items)
+      ? audits["network-requests"].details.items
+      : [];
+    const renderBlockingMetrics = collectAuditResourceMetrics(audits, [
+      "render-blocking-resources",
+      "render-blocking-insight",
+      "network-dependency-tree-insight"
+    ]);
+    const unusedMetrics = collectAuditResourceMetrics(audits, [
+      "unused-css-rules",
+      "unused-javascript"
+    ]);
+    const seenInReport = new Set();
+
+    networkItems.forEach((item) => {
+      const type = assetTypeFromNetworkItem(item);
+      const url = item.url;
+      if (!type || !url) {
+        return;
+      }
+
+      const normalizedUrl = normalizeAssetUrl(url);
+      const key = `${type}:${normalizedUrl}`;
+      const source = classifyAssetSource(normalizedUrl, pageOrigin);
+      const renderBlocking = renderBlockingMetrics.get(normalizedUrl);
+      const unused = unusedMetrics.get(normalizedUrl);
+      const transferBytes = numberOrZero(item.transferSize);
+      const resourceBytes = numberOrZero(item.resourceSize);
+      const startTime = typeof item.networkRequestTime === "number" ? item.networkRequestTime : null;
+      const endTime = typeof item.networkEndTime === "number" ? item.networkEndTime : null;
+      const record = assets.get(key) || {
+        url: normalizedUrl,
+        type,
+        sourceType: source.sourceType,
+        sourceName: source.sourceName,
+        sourceKey: source.sourceKey,
+        reports: new Set(),
+        occurrences: 0,
+        sampleCount: 0,
+        transferBytesTotal: 0,
+        resourceBytesTotal: 0,
+        maxTransferBytes: 0,
+        maxResourceBytes: 0,
+        unusedBytes: 0,
+        unusedPercent: 0,
+        renderBlockingMs: 0,
+        renderBlockingReports: 0,
+        firstRequestTimeMs: null,
+        lastEndTimeMs: null,
+        priorities: new Map()
+      };
+
+      record.occurrences += 1;
+      record.sampleCount += 1;
+      record.transferBytesTotal += transferBytes;
+      record.resourceBytesTotal += resourceBytes;
+      record.maxTransferBytes = Math.max(record.maxTransferBytes, transferBytes);
+      record.maxResourceBytes = Math.max(record.maxResourceBytes, resourceBytes);
+      record.unusedBytes = Math.max(record.unusedBytes, unused?.wastedBytes || 0);
+      record.unusedPercent = Math.max(record.unusedPercent, unused?.wastedPercent || 0);
+      record.renderBlockingMs = Math.max(record.renderBlockingMs, renderBlocking?.wastedMs || 0);
+
+      if (renderBlocking && !seenInReport.has(`${key}:render-blocking`)) {
+        record.renderBlockingReports += 1;
+        seenInReport.add(`${key}:render-blocking`);
+      }
+
+      record.reports.add(reportIndex);
+      if (startTime != null) {
+        record.firstRequestTimeMs = record.firstRequestTimeMs == null
+          ? startTime
+          : Math.min(record.firstRequestTimeMs, startTime);
+      }
+      if (endTime != null) {
+        record.lastEndTimeMs = record.lastEndTimeMs == null
+          ? endTime
+          : Math.max(record.lastEndTimeMs, endTime);
+      }
+      if (item.priority) {
+        record.priorities.set(item.priority, (record.priorities.get(item.priority) || 0) + 1);
+      }
+
+      seenInReport.add(key);
+      assets.set(key, record);
+    });
+  });
+
+  const finalizedAssets = [...assets.values()]
+    .map((record) => finalizeAssetRecord(record, reports.length))
+    .sort((left, right) =>
+      (right.transferBytes - left.transferBytes) ||
+      (right.renderBlockingReports - left.renderBlockingReports) ||
+      (right.unusedBytes - left.unusedBytes) ||
+      String(left.fileName).localeCompare(String(right.fileName))
+    );
+
+  return summarizeAssets(finalizedAssets, reports.length);
+}
+
 function collectResourceOffenders(auditsOrSeries) {
   const auditSets = Array.isArray(auditsOrSeries)
     ? auditsOrSeries.filter(Boolean)
@@ -559,6 +975,7 @@ module.exports = {
   extractDiagnosticsFromReports,
   extractDiagnosticsFromReport,
   extractReportContext,
+  extractAssetPayloadFromReports,
   extractResourceOffendersFromReports,
   extractResourceOffendersFromReport
 };
