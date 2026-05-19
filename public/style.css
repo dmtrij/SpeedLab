@@ -972,6 +972,7 @@ textarea::placeholder {
 
 .custom-select-button {
   position: relative;
+  display: block;
   width: 100%;
   min-height: 38px;
   padding: 0 34px 0 12px;
@@ -983,6 +984,7 @@ textarea::placeholder {
   cursor: pointer;
   font-size: 0.78rem;
   line-height: 1.25;
+  overflow: hidden;
 }
 
 .form-custom-select .custom-select-button {
@@ -1010,6 +1012,8 @@ textarea::placeholder {
 
 .custom-select-option-label {
   display: flex;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   align-items: center;
   gap: 10px;
@@ -1017,10 +1021,19 @@ textarea::placeholder {
   white-space: nowrap;
 }
 
+.custom-select-button > .custom-select-option-label {
+  width: calc(100% - 22px);
+}
+
 .custom-select-option-label span {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.custom-select-option-label span:first-child {
+  flex: 0 0 auto;
 }
 
 .custom-select-option-label span + span {
