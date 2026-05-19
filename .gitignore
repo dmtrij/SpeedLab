@@ -1,0 +1,13 @@
+.env.local
+node_modules/
+app-data/
+
+# Legacy runtime artifacts before the app-data layout
+speedlab.db
+speedlab.db-shm
+speedlab.db-wal
+results/
+chrome-data/
+server.stdout.log
+server.stderr.log
+.speedlab.pid

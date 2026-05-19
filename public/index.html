@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Cache-Control" content="no-store, max-age=0" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <title>SpeedLab</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <script>
+      if (window.location.protocol === "file:") {
+        window.location.replace("http://localhost:3000/");
+      }
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/style.css?v=20260520-11" />
+  </head>
+  <body>
+    <div class="site-bg"></div>
+    <div class="layout">
+      <header class="topbar">
+        <a href="/" class="brand" data-link>
+          <span class="brand-mark">SL</span>
+          <span class="brand-copy">
+            <strong>SpeedLab</strong>
+            <small id="topbar-subtitle">&#1051;&#1086;&#1082;&#1072;&#1083;&#1100;&#1085;&#1072;&#1103; &#1087;&#1072;&#1085;&#1077;&#1083;&#1100; Lighthouse</small>
+            <small id="topbar-context" class="topbar-context" hidden></small>
+          </span>
+        </a>
+        <nav class="nav">
+          <a href="/history" data-link>&#1048;&#1089;&#1090;&#1086;&#1088;&#1080;&#1103;</a>
+        </nav>
+      </header>
+      <main id="app" class="app-shell" aria-live="polite"></main>
+    </div>
+    <script src="/constants.js?v=20260520-1" defer></script>
+    <script src="/utils.js?v=20260519-1" defer></script>
+    <script src="/formatters.js?v=20260519-1" defer></script>
+    <script src="/api.js?v=20260519-1" defer></script>
+    <script src="/router.js?v=20260519-1" defer></script>
+    <script src="/animations.js?v=20260519-1" defer></script>
+    <script src="/custom-select.js?v=20260520-2" defer></script>
+    <script src="/launcher.js?v=20260520-3" defer></script>
+    <script src="/history-actions.js?v=20260519-1" defer></script>
+    <script src="/test-actions.js?v=20260520-2" defer></script>
+    <script src="/history-view.js?v=20260519-1" defer></script>
+    <script src="/test-view.js?v=20260520-9" defer></script>
+    <script src="/app.js?v=20260519-13" defer></script>
+  </body>
+  </html>
