@@ -968,123 +968,38 @@
         return "";
       }
 
-      const severityLabel = {
-        high: "Высокий",
-        medium: "Средний",
-        low: "Низкий"
-      };
-      const actionCopy = {
-        "elementor-payload": {
-          title: "Elementor CSS/JS на критическом пути",
-          fix: "Проверить эти Elementor-файлы первыми: что реально нужно первому экрану оставить, остальное дробить или грузить позже."
-        },
-        "render-blocking-css": {
-          title: "CSS блокирует первый рендер",
-          fix: "Для файлов ниже: критичный минимум встроить в HTML, остальное отложить. CSS меню/попапа не трогать без проверки."
-        },
-        "render-blocking-js": {
-          title: "JS блокирует старт страницы",
-          fix: "Отложить только те скрипты ниже, которые не нужны для первого экрана, меню, попапа и форм."
-        },
-        "unused-css-js": {
-          title: "Lighthouse видит лишний CSS/JS",
-          fix: "Начать с файлов ниже: отключить лишний виджет/модуль, потом дробить или грузить после взаимодействия."
-        },
-        "royal-addons-payload": {
-          title: "Royal Addons добавляет лишний вес",
-          fix: "Сверить файлы ниже с реальными виджетами страницы. Не отключать WPR popup/menu, если на них держится мобильное меню."
-        },
-        "icon-fonts": {
-          title: "Иконки/шрифты дорогие для мобильной версии",
-          fix: "Проверить файлы ниже: заменить иконки на SVG/sprite или грузить шрифт позже после проверки UI."
-        },
-        "heavy-plugin-js": {
-          title: "Тяжелый JS плагина",
-          fix: "Найти виджет, который требует эти файлы. Если его нет на первом экране, отложить или выгрузить по странице."
-        },
-        "third-party-js": {
-          title: "Сторонний JS в загрузке",
-          fix: "Файлы ниже грузить после согласия, простоя браузера или взаимодействия, если они не обязательны на старте."
-        }
-      };
+      const criticalResources = [];
+      const seenUrls = new Set();
 
-      function renderActionResource(resource = {}) {
-        const flags = [
-          resource.renderBlockingReports ? `${resource.renderBlockingReports}/${resource.totalReports} блокирует` : "",
-          resource.unusedBytes ? `${bytesLabel(resource.unusedBytes)} лишнее` : "",
-          resource.transferBytes ? `${bytesLabel(resource.transferBytes)} передача` : "",
-          resource.resourceBytes ? `${bytesLabel(resource.resourceBytes)} исходный` : ""
-        ].filter(Boolean);
-        const source = assetSourceLabel(resource);
-        const fileName = resource.fileName || resource.url || "resource";
+      actions.forEach((action) => {
+        (action.resources || []).forEach((resource) => {
+          const key = resource.url || resource.fileName;
+          if (!key || seenUrls.has(key)) {
+            return;
+          }
 
-        return `
-          <li class="asset-action-resource">
-            <a href="${escapeHtml(resource.url || "#")}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(resource.url || "")}">
-              ${escapeHtml(fileName)}
-            </a>
-            <span>${escapeHtml(source)}</span>
-            <small>
-              ${flags.map((flag) => `<b>${escapeHtml(flag)}</b>`).join("")}
-            </small>
-          </li>
-        `;
+          seenUrls.add(key);
+          criticalResources.push(resource);
+        });
+      });
+
+      if (!criticalResources.length) {
+        return "";
       }
+
+      const criticalSummary = {
+        count: criticalResources.length,
+        transferBytes: sumAssetBytes(criticalResources, "transferBytes"),
+        resourceBytes: sumAssetBytes(criticalResources, "resourceBytes")
+      };
 
       return `
         <div class="asset-action-plan">
           <div class="asset-action-plan-head">
-            <h4>Приоритетные задачи оптимизации</h4>
-            <span>конкретные ресурсы и безопасные действия</span>
+            <h4>Критические ресурсы</h4>
+            <span>тот же инвентарь, только файлы из приоритетных рекомендаций</span>
           </div>
-          <div class="asset-action-list">
-            ${actions.map((action, index) => {
-              const copy = actionCopy[action.id] || {};
-              const resources = (action.resources || []).slice(0, 3);
-              const hiddenCount = Math.max(0, (action.resources || []).length - resources.length);
-              const severity = action.severity || "medium";
-
-              const resourceSummary = resources[0]
-                ? `${resources.length} из ${(action.resources || []).length} файлов · ${resources[0].fileName || resources[0].url || "resource"}`
-                : "Файлы не найдены";
-
-              return `
-                <article class="asset-action-row severity-${escapeHtml(severity)}">
-                  <div class="asset-action-copy">
-                    <div class="asset-action-main">
-                    <div class="asset-action-title">
-                      <span>${escapeHtml(`#${index + 1}`)}</span>
-                      <strong>${escapeHtml(copy.title || action.title)}</strong>
-                      <div class="asset-action-title-badges">
-                        <em>${escapeHtml(severityLabel[severity] || severity)}</em>
-                        ${action.risk ? renderRiskBadge(action.risk) : ""}
-                      </div>
-                    </div>
-                    <p>${escapeHtml(copy.fix || action.fix)}</p>
-                    </div>
-                    <div class="asset-action-impact">
-                      <span>${escapeHtml(action.impact?.affectedCount || 0)} файлов</span>
-                      <span>${escapeHtml(bytesLabel(action.impact?.transferBytes || 0))}</span>
-                      ${action.impact?.renderBlockingMs ? `<span>${escapeHtml(Math.round(action.impact.renderBlockingMs))} ms блокировка</span>` : ""}
-                      ${action.impact?.unusedBytes ? `<span>${escapeHtml(bytesLabel(action.impact.unusedBytes))} лишнее</span>` : ""}
-                    </div>
-                  </div>
-                  <details class="asset-action-resource-box">
-                    <summary>
-                      <span>Ресурсы</span>
-                      <strong>${escapeHtml(resourceSummary)}</strong>
-                    </summary>
-                    ${resources.length ? `
-                      <ol class="asset-action-resources">
-                        ${resources.map(renderActionResource).join("")}
-                      </ol>
-                      ${hiddenCount ? `<div class="asset-action-more">+${escapeHtml(hiddenCount)} файлов в полном списке</div>` : ""}
-                    ` : `<div class="asset-action-more">Нет конкретных файлов в данных Lighthouse</div>`}
-                  </details>
-                </article>
-              `;
-            }).join("")}
-          </div>
+          ${renderAssetInventorySection("Критические CSS/JS", criticalSummary, criticalResources)}
         </div>
       `;
     }

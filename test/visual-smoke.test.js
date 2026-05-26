@@ -178,9 +178,10 @@ test("visual smoke renders report layout, resource inventory, and score gear", a
       resourceShortcutHasLongText: Array.from(document.querySelectorAll(".resource-shortcut")).some((item) => Boolean(item.querySelector("small"))),
       assetInventoryItems: document.querySelectorAll("[data-asset-item]").length,
       assetInventoryListOverflow: getComputedStyle(document.querySelector(".asset-inventory-list")).overflowY,
-      actionRows: document.querySelectorAll(".asset-action-row").length,
+      criticalItems: document.querySelectorAll(".asset-action-plan .asset-inventory-item").length,
+      criticalUsesInventoryPattern: Boolean(document.querySelector(".asset-action-plan .asset-inventory-section")),
+      legacyActionRows: document.querySelectorAll(".asset-action-row").length,
       oldActionCards: document.querySelectorAll(".asset-action-card").length,
-      actionResources: document.querySelectorAll(".asset-action-resource").length,
       resourceAccordionCount: document.querySelectorAll(".accordion summary").length,
       screenshotAreaText: document.querySelector(".stage-card")?.textContent || ""
     }));
@@ -195,9 +196,10 @@ test("visual smoke renders report layout, resource inventory, and score gear", a
     assert.equal(detailState.resourceShortcutHasLongText, false);
     assert.ok(detailState.assetInventoryItems >= 3);
     assert.equal(detailState.assetInventoryListOverflow, "auto");
-    assert.ok(detailState.actionRows >= 2);
+    assert.ok(detailState.criticalItems >= 2);
+    assert.equal(detailState.criticalUsesInventoryPattern, true);
+    assert.equal(detailState.legacyActionRows, 0);
     assert.equal(detailState.oldActionCards, 0);
-    assert.ok(detailState.actionResources >= 2);
     assert.equal(detailState.resourceAccordionCount, 0);
     assert.ok(detailState.duplicateLabels.includes("дубликат #2"));
     assert.match(detailState.screenshotAreaText, /Уникальных результатов: 2 \/ 3/);
