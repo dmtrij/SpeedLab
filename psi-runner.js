@@ -5,6 +5,9 @@ const { createCancelledError } = require("./cancellation");
 const runtimePaths = require("./runtime-paths");
 
 const PSI_ENDPOINT = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed";
+const PSI_DECOY_URL = process.env.SPEEDLAB_PSI_DECOY_URL || "https://example.com/";
+const PSI_DECOY_MIN_VISIBLE_MS = Number(process.env.SPEEDLAB_PSI_DECOY_MIN_VISIBLE_MS || 1800);
+const PSI_RETRY_DELAY_MS = Number(process.env.SPEEDLAB_PSI_RETRY_DELAY_MS || 1200);
 
 function buildCacheBustedTestUrl(url, runIndex) {
   const parsedUrl = new URL(url);
@@ -51,6 +54,26 @@ function throwIfCancelled(testController) {
   if (testController?.cancelled) {
     throw createCancelledError(testController.reason);
   }
+}
+
+function sleepWithCancellation(ms, testController) {
+  if (!ms || ms <= 0) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve, reject) => {
+    let releaseCancel = null;
+    const timeout = setTimeout(() => {
+      releaseCancel?.();
+      resolve();
+    }, ms);
+
+    releaseCancel = testController?.onCancel((reason) => {
+      clearTimeout(timeout);
+      releaseCancel?.();
+      reject(createCancelledError(reason));
+    }) || null;
+  });
 }
 
 function mergeAbortSignals(signals) {
@@ -156,15 +179,104 @@ async function runPsiAttempt({ url, device, apiKey, testController }) {
   }
 }
 
+function isRetryablePsiError(error) {
+  const message = error instanceof Error ? error.message : String(error || "");
+
+  if (/limit|quota|api key|rejected|status 403|status 429/i.test(message)) {
+    return false;
+  }
+
+  return /something went wrong|timed out|temporar|internal|unavailable|fetch failed|network|socket|econn|reset/i.test(message);
+}
+
+async function runPsiAttemptWithRetry({
+  url,
+  retryUrl,
+  device,
+  apiKey,
+  testController,
+  onLog,
+  retryDelayMs = PSI_RETRY_DELAY_MS,
+  runIndex
+}) {
+  try {
+    return await runPsiAttempt({
+      url,
+      device,
+      apiKey,
+      testController
+    });
+  } catch (error) {
+    if (testController?.cancelled || !isRetryablePsiError(error)) {
+      throw error;
+    }
+
+    const message = error instanceof Error ? error.message : "unknown PSI error";
+    const fallbackUrl = retryUrl || buildCacheBustedTestUrl(url, `retry-${runIndex || "unknown"}`);
+    onLog?.(`PSI run ${runIndex || "?"} failed with retryable error (${message}). Retrying with cache-busting URL: ${fallbackUrl}`);
+    await sleepWithCancellation(retryDelayMs, testController);
+
+    return runPsiAttempt({
+      url: fallbackUrl,
+      device,
+      apiKey,
+      testController
+    });
+  }
+}
+
+async function runHiddenPsiDecoy({
+  device,
+  apiKey,
+  testController,
+  onLog,
+  onDecoyStart,
+  onDecoyComplete,
+  minVisibleMs = PSI_DECOY_MIN_VISIBLE_MS,
+  reason,
+  runIndex
+}) {
+  const decoyUrl = buildCacheBustedTestUrl(PSI_DECOY_URL, `decoy-${runIndex}`);
+  const visibleStartedAt = Date.now();
+  onLog?.(`Hidden PSI decoy started before retry (${reason}): ${decoyUrl}`);
+  onDecoyStart?.({ runIndex, url: decoyUrl, reason });
+
+  try {
+    await runPsiAttempt({
+      url: decoyUrl,
+      device,
+      apiKey,
+      testController
+    });
+    onLog?.("Hidden PSI decoy completed. Retrying target URL.");
+  } catch (error) {
+    if (testController?.cancelled) {
+      throw createCancelledError(testController.reason);
+    }
+
+    const message = error instanceof Error ? error.message : "unknown decoy error";
+    onLog?.(`Hidden PSI decoy failed (${message}). Retrying target URL anyway.`);
+  } finally {
+    const remainingVisibleMs = Math.max(0, minVisibleMs - (Date.now() - visibleStartedAt));
+    await sleepWithCancellation(remainingVisibleMs, testController);
+    onDecoyComplete?.({ runIndex, url: decoyUrl, reason });
+  }
+}
+
 async function runPsiSequence({
   testId,
   url,
   device,
   runs,
   apiKey,
+  previousMetrics,
   testController,
   onLog,
   onMainRunStart,
+  onDecoyStart,
+  onDecoyComplete,
+  decoyMinVisibleMs,
+  psiRetryDelayMs,
   onRunComplete
 }) {
   const resultsDir = runtimePaths.resolveTestResultsDir(testId);
@@ -175,41 +287,72 @@ async function runPsiSequence({
   }
 
   const savedRuns = [];
+  const previousSignature = previousMetrics ? metricSignature(previousMetrics) : null;
 
   if (runs > 1) {
     onLog?.("PSI series starts with the original URL. If Google returns an identical lab snapshot, SpeedLab retries that run with a speedlab_psi_run cache-busting query parameter.");
+  } else {
+    onLog?.("Single PSI run uses a speedlab_psi_run cache-busting query parameter so Google is less likely to return the previous lab snapshot.");
   }
 
   for (let runIndex = 1; runIndex <= runs; runIndex += 1) {
     throwIfCancelled(testController);
     onMainRunStart?.({ runIndex });
-    onLog?.(`PSI run ${runIndex}/${runs} started for URL: ${url}`);
+    const initialUrl = runs === 1 ? buildCacheBustedTestUrl(url, runIndex) : url;
+    onLog?.(`PSI run ${runIndex}/${runs} started for URL: ${initialUrl}`);
 
-    let { reportJson, metrics, testedUrl } = await runPsiAttempt({
-      url,
+    let { reportJson, metrics, testedUrl } = await runPsiAttemptWithRetry({
+      url: initialUrl,
+      retryUrl: buildCacheBustedTestUrl(url, `error-${runIndex}`),
       device,
       apiKey,
-      testController
+      testController,
+      onLog,
+      retryDelayMs: psiRetryDelayMs,
+      runIndex
     });
 
     const signature = metricSignature(metrics);
     const duplicateOf = savedRuns.find((run) => metricSignature(run) === signature);
-    if (runs > 1 && duplicateOf) {
+    const matchesPrevious = previousSignature && signature === previousSignature;
+
+    if ((runs > 1 && duplicateOf) || matchesPrevious) {
       throwIfCancelled(testController);
       const retryUrl = buildCacheBustedTestUrl(url, runIndex);
-      onLog?.(`PSI run ${runIndex}/${runs} duplicated run #${duplicateOf.runIndex}. Retrying with cache-busting URL: ${retryUrl}`);
+      const reason = duplicateOf
+        ? `duplicated run #${duplicateOf.runIndex}`
+        : "matched previous completed PSI snapshot";
 
-      ({ reportJson, metrics, testedUrl } = await runPsiAttempt({
-        url: retryUrl,
+      onLog?.(`PSI run ${runIndex}/${runs} ${reason}. Running hidden decoy before retry.`);
+      await runHiddenPsiDecoy({
         device,
         apiKey,
-        testController
+        testController,
+        onLog,
+        onDecoyStart,
+        onDecoyComplete,
+        minVisibleMs: decoyMinVisibleMs,
+        reason,
+        runIndex
+      });
+      throwIfCancelled(testController);
+      onLog?.(`PSI run ${runIndex}/${runs} retrying target URL with cache-busting URL: ${retryUrl}`);
+
+      ({ reportJson, metrics, testedUrl } = await runPsiAttemptWithRetry({
+        url: retryUrl,
+        retryUrl: buildCacheBustedTestUrl(url, `error-retry-${runIndex}`),
+        device,
+        apiKey,
+        testController,
+        onLog,
+        retryDelayMs: psiRetryDelayMs,
+        runIndex
       }));
 
       if (metricSignature(metrics) === signature) {
-        onLog?.(`PSI run ${runIndex}/${runs} is still a duplicate after cache-busting. Saving Google's response as returned.`);
+        onLog?.(`PSI run ${runIndex}/${runs} is still identical after hidden decoy and cache-busting. Saving Google's response as returned.`);
       } else {
-        onLog?.(`PSI run ${runIndex}/${runs} returned a separate result after cache-busting.`);
+        onLog?.(`PSI run ${runIndex}/${runs} returned a separate result after hidden decoy and cache-busting.`);
       }
     }
 

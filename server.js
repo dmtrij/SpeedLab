@@ -9,8 +9,13 @@ const { runLighthouseSequence } = require("./lighthouse-runner");
 const { runPsiSequence } = require("./psi-runner");
 const controllerUtils = require("./cancellation");
 const testDomain = require("./run-helpers");
-const { computeMetricStats } = require("./stats");
-const { buildTestResponse, buildMarkdownReport } = require("./report-service");
+const { computeMetricStats, metricsFromTest } = require("./stats");
+const {
+  buildTestResponse,
+  buildMarkdownReport,
+  buildAssetJsonExport,
+  buildAssetCsvExport
+} = require("./report-service");
 
 runtimePaths.prepareRuntimePaths();
 envUtils.loadLocalEnvFile(runtimePaths.envFilePath);
@@ -125,9 +130,27 @@ async function executeTest(testId) {
     let savedRuns = [];
 
     if ((test.runner || "local") === "psi") {
+      const previousCompletedTest = db.getPreviousCompletedTest(
+        test.url,
+        test.device,
+        test.runner || "local",
+        test.id
+      );
+
       savedRuns = await runPsiSequence({
         ...sequenceOptions,
-        apiKey: testDomain.resolvePsiApiKey(runtimeOptions)
+        apiKey: testDomain.resolvePsiApiKey(runtimeOptions),
+        previousMetrics: previousCompletedTest ? metricsFromTest(previousCompletedTest) : null,
+        onDecoyStart: () => {
+          db.updateTest(testId, {
+            status: "tuning"
+          });
+        },
+        onDecoyComplete: ({ runIndex }) => {
+          db.updateTest(testId, {
+            status: `run ${runIndex} of ${test.runs_requested}`
+          });
+        }
       });
     } else {
       savedRuns = await runLighthouseSequence({
@@ -382,6 +405,40 @@ function createApp() {
       .type("text/markdown; charset=utf-8")
       .set("Content-Disposition", `inline; filename="speedlab-test-${testId}.md"`)
       .send(markdown);
+  });
+
+  app.get("/api/tests/:id/assets.json", (req, res) => {
+    const testId = Number(req.params.id);
+    if (!Number.isInteger(testId)) {
+      return res.status(400).json({ error: "Некорректный test id" });
+    }
+
+    const payload = buildAssetJsonExport(testId);
+    if (!payload) {
+      return res.status(404).json({ error: "Тест не найден" });
+    }
+
+    return res
+      .type("application/json; charset=utf-8")
+      .set("Content-Disposition", `attachment; filename="speedlab-test-${testId}-assets.json"`)
+      .send(JSON.stringify(payload, null, 2));
+  });
+
+  app.get("/api/tests/:id/assets.csv", (req, res) => {
+    const testId = Number(req.params.id);
+    if (!Number.isInteger(testId)) {
+      return res.status(400).type("text/plain").send("Некорректный test id");
+    }
+
+    const csv = buildAssetCsvExport(testId);
+    if (!csv) {
+      return res.status(404).type("text/plain").send("Тест не найден");
+    }
+
+    return res
+      .type("text/csv; charset=utf-8")
+      .set("Content-Disposition", `attachment; filename="speedlab-test-${testId}-assets.csv"`)
+      .send(csv);
   });
 
   return app;

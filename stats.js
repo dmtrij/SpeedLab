@@ -2,6 +2,7 @@ const fs = require("fs");
 const runtimePaths = require("./runtime-paths");
 
 const METRICS = ["score", "fcp", "lcp", "si", "tbt", "cls", "ttfb"];
+const ASSET_TYPES = ["js", "css", "media", "font", "other"];
 
 function toNumber(value, digits = 3) {
   if (typeof value !== "number" || Number.isNaN(value)) {
@@ -187,14 +188,14 @@ function truncate(text, maxLength = 240) {
 }
 
 const DIAGNOSTIC_FIXES = {
-  "render-blocking-resources": "Критичный CSS оставить inline, остальной CSS грузить позже. JS поставить defer/async или убрать с первого экрана.",
-  "render-blocking-insight": "Критичный CSS оставить inline, остальной CSS грузить позже. JQuery и лишний JS перенести в defer или убрать с первого экрана.",
+  "render-blocking-resources": "Критичный CSS встроить в HTML, остальной CSS грузить позже. JS поставить defer/async или убрать с первого экрана.",
+  "render-blocking-insight": "Критичный CSS встроить в HTML, остальной CSS грузить позже. JQuery и лишний JS перенести в defer или убрать с первого экрана.",
   "unused-css-rules": "Удалить неиспользуемый CSS, разбить стили по страницам, отключить лишние стили плагинов.",
   "unused-javascript": "Убрать лишние скрипты, разделить JS на чанки, отложить виджеты/аналитику до взаимодействия.",
   "largest-contentful-paint-element": "Оптимизировать LCP-элемент: preload главной картинки/шрифта, убрать lazy для hero, уменьшить размер изображения.",
   "uses-optimized-images": "Сжать изображения и отдавать правильный размер под экран.",
   "image-delivery-insight": "Сжать перечисленные изображения, заменить тяжелые PNG/JPEG на WebP/AVIF и не отдавать картинки крупнее реального размера.",
-  "uses-responsive-images": "Добавить srcset/sizes и не отдавать desktop-картинки на mobile.",
+  "uses-responsive-images": "Добавить srcset/sizes и не отдавать десктопные картинки на мобильной версии.",
   "offscreen-images": "Для изображений ниже первого экрана включить loading=\"lazy\".",
   "modern-image-formats": "Отдавать WebP/AVIF вместо PNG/JPEG.",
   "total-byte-weight": "Срезать общий вес страницы: картинки, CSS, JS, сторонние виджеты.",
@@ -214,7 +215,7 @@ const DIAGNOSTIC_FIXES = {
   "network-dependency-tree-insight": "Уменьшить цепочку критичных запросов: меньше CSS/JS до первого рендера, preload только реально важных ресурсов.",
   "forced-reflow-insight": "Найти скрипт, который читает размеры DOM после изменений стилей. Обычно виноваты слайдеры, анимации или page builder виджеты.",
   "prioritize-lcp-image": "Добавить fetchpriority=\"high\" и preload для LCP-картинки.",
-  "first-contentful-paint": "FCP тормозит из-за блокирующих CSS/JS, шрифтов или тяжелого первого экрана. Сначала править render-blocking и шрифты.",
+  "first-contentful-paint": "FCP тормозит из-за блокирующих CSS/JS, шрифтов или тяжелого первого экрана. Сначала править блокирующие ресурсы и шрифты.",
   "largest-contentful-paint": "LCP слишком поздний. Найти главный элемент первого экрана и ускорить его загрузку: image preload, меньше CSS/JS до рендера.",
   "speed-index": "Контент визуально появляется медленно. Убрать блокирующие ресурсы, тяжелые изображения и лишний JS на старте."
 };
@@ -295,7 +296,7 @@ function getDiagnosticFix(id) {
     return "Разобрать вклад LCP по этапам: TTFB, загрузка ресурса, задержка рендера и CSS/JS до hero-элемента. Дальше чинить самый большой вклад, а не сам LCP вслепую.";
   }
 
-  return DIAGNOSTIC_FIXES[id] || "Открыть raw JSON этого прогона, найти ресурсы в details и убрать, отложить или оптимизировать конкретный файл.";
+  return DIAGNOSTIC_FIXES[id] || "Открыть исходный JSON этого прогона, найти ресурсы в details и убрать, отложить или оптимизировать конкретный файл.";
 }
 
 function getDiagnosticProblem(id, fallback) {
@@ -324,43 +325,6 @@ function extractDetailTargets(details) {
     })
     .filter(Boolean)
     .slice(0, 4);
-}
-
-function classifyResource(url, auditId = "") {
-  const value = String(url || "").toLowerCase();
-  if (/\.(png|jpe?g|webp|avif|gif|svg)(\?|$)/.test(value) || auditId.includes("image")) {
-    return "Images";
-  }
-  if (/\.css(\?|$)/.test(value) || auditId.includes("css") || auditId.includes("render-blocking")) {
-    return "CSS";
-  }
-  if (/\.m?js(\?|$)/.test(value) || auditId.includes("javascript") || auditId.includes("bootup")) {
-    return "JS";
-  }
-  if (/\.(woff2?|ttf|otf)(\?|$)/.test(value) || auditId.includes("font")) {
-    return "Fonts";
-  }
-  if (auditId.includes("cache")) {
-    return "Cache";
-  }
-  if (auditId.includes("server")) {
-    return "Server";
-  }
-  return "Other";
-}
-
-function pluginNameFromUrl(url) {
-  const match = String(url || "").match(/\/wp-content\/plugins\/([^/]+)/i);
-  if (match) {
-    return match[1];
-  }
-  if (String(url || "").includes("/wp-includes/")) {
-    return "WordPress core";
-  }
-  if (String(url || "").includes("/uploads/")) {
-    return "Uploads";
-  }
-  return "";
 }
 
 function numberOrZero(value) {
@@ -402,7 +366,26 @@ function assetTypeFromNetworkItem(item = {}) {
     return "js";
   }
 
-  return null;
+  if (
+    resourceType === "image" ||
+    resourceType === "media" ||
+    mimeType.startsWith("image/") ||
+    mimeType.startsWith("video/") ||
+    mimeType.startsWith("audio/") ||
+    /\.(png|jpe?g|webp|avif|gif|svg|ico|mp4|webm|mov|m4v|mp3|wav|ogg)(?:[?#]|$)/.test(url)
+  ) {
+    return "media";
+  }
+
+  if (
+    resourceType === "font" ||
+    mimeType.includes("font") ||
+    /\.(woff2?|ttf|otf|eot)(?:[?#]|$)/.test(url)
+  ) {
+    return "font";
+  }
+
+  return "other";
 }
 
 function pageOriginFromReport(lhr = {}) {
@@ -522,6 +505,15 @@ function collectAuditResourceMetrics(audits = {}, auditIds = []) {
 }
 
 function emptyAssetPayloadReport(reportCount = 0) {
+  const emptyBucket = () => ({
+    count: 0,
+    transferBytes: 0,
+    resourceBytes: 0,
+    unusedBytes: 0,
+    renderBlockingCount: 0,
+    thirdPartyBytes: 0
+  });
+
   return {
     summary: {
       reportCount,
@@ -530,26 +522,21 @@ function emptyAssetPayloadReport(reportCount = 0) {
       totalResourceBytes: 0,
       totalUnusedBytes: 0,
       renderBlockingCount: 0,
-      css: {
-        count: 0,
-        transferBytes: 0,
-        resourceBytes: 0,
-        unusedBytes: 0,
-        renderBlockingCount: 0,
-        thirdPartyBytes: 0
-      },
-      js: {
-        count: 0,
-        transferBytes: 0,
-        resourceBytes: 0,
-        unusedBytes: 0,
-        renderBlockingCount: 0,
-        thirdPartyBytes: 0
-      }
+      totalThirdPartyBytes: 0,
+      css: emptyBucket(),
+      js: emptyBucket(),
+      media: emptyBucket(),
+      font: emptyBucket(),
+      other: emptyBucket()
     },
     groups: [],
+    actions: [],
+    renderBlocking: [],
     css: [],
-    js: []
+    js: [],
+    media: [],
+    fonts: [],
+    other: []
   };
 }
 
@@ -561,8 +548,7 @@ function finalizeAssetRecord(record, totalReports) {
   const sampleCount = Math.max(1, record.sampleCount);
   const priority = [...record.priorities.entries()]
     .sort((left, right) => right[1] - left[1])[0]?.[0] || null;
-
-  return {
+  const baseAsset = {
     url: record.url,
     fileName: assetFileName(record.url),
     type: record.type,
@@ -583,6 +569,11 @@ function finalizeAssetRecord(record, totalReports) {
     firstRequestTimeMs: record.firstRequestTimeMs == null ? null : toNumber(record.firstRequestTimeMs, 1),
     lastEndTimeMs: record.lastEndTimeMs == null ? null : toNumber(record.lastEndTimeMs, 1),
     priority
+  };
+
+  return {
+    ...baseAsset,
+    recommendation: buildAssetRecommendation(baseAsset)
   };
 }
 
@@ -634,11 +625,374 @@ function buildAssetGroups(assets = []) {
     .slice(0, 24);
 }
 
+function assetText(asset = {}) {
+  return [
+    asset.url,
+    asset.fileName,
+    asset.sourceType,
+    asset.sourceName,
+    asset.sourceKey
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function assetMatches(asset, needles = []) {
+  const text = assetText(asset);
+  return needles.some((needle) => text.includes(String(needle).toLowerCase()));
+}
+
+const RESOURCE_RISKS = {
+  safe: {
+    level: "safe",
+    label: "Низкий риск",
+    detail: "Обычно можно править без риска интерактива, но финально проверить визуально."
+  },
+  verify: {
+    level: "verify",
+    label: "Проверить вручную",
+    detail: "Перед отключением или отложенной загрузкой сверить первый экран и интерактив."
+  },
+  fragile: {
+    level: "fragile",
+    label: "Высокий риск",
+    detail: "Может сломать меню, попап, форму или другой ранний интерактив."
+  }
+};
+
+const RESOURCE_RISK_RANK = {
+  safe: 1,
+  verify: 2,
+  fragile: 3
+};
+
+function buildResourceRisk(asset = {}, recommendationId = "review") {
+  const fragileNeedles = [
+    "jquery",
+    "smartmenus",
+    "nav-menu",
+    "menu",
+    "popup",
+    "modal",
+    "form",
+    "wpr",
+    "royal",
+    "royal-elementor-addons",
+    "elementor-pro",
+    "elementor-frontend"
+  ];
+
+  if (recommendationId === "keep") {
+    return RESOURCE_RISKS.safe;
+  }
+
+  if (assetMatches(asset, fragileNeedles) && ["critical-css", "delay-js", "async-css", "reduce-unused"].includes(recommendationId)) {
+    return RESOURCE_RISKS.fragile;
+  }
+
+  if (["optimize-media", "lazy-media"].includes(recommendationId)) {
+    return RESOURCE_RISKS.safe;
+  }
+
+  return RESOURCE_RISKS.verify;
+}
+
+function withResourceRisk(asset, recommendation) {
+  return {
+    ...recommendation,
+    risk: buildResourceRisk(asset, recommendation.id)
+  };
+}
+
+function buildAssetRecommendation(asset = {}) {
+  const transferKb = numberOrZero(asset.transferBytes) / 1024;
+  const unusedKb = numberOrZero(asset.unusedBytes) / 1024;
+  const startsEarly = asset.firstRequestTimeMs != null && asset.firstRequestTimeMs <= 1200;
+
+  if (asset.type === "css" && asset.renderBlockingReports > 0) {
+    return withResourceRisk(asset, {
+      id: "critical-css",
+      label: "Критичный CSS / отложить остальное",
+      detail: "Блокирует первый рендер. Вынести CSS первого экрана inline, остальное грузить позже. Не трогать CSS попапа/меню вслепую."
+    });
+  }
+
+  if (asset.type === "js" && asset.renderBlockingReports > 0) {
+    return withResourceRisk(asset, {
+      id: "delay-js",
+      label: "Отложить JS",
+      detail: "Скрипт в критической цепочке. Отложить, если он не нужен для первого экрана, меню, попапа или формы."
+    });
+  }
+
+  if (unusedKb >= 25) {
+    return withResourceRisk(asset, {
+      id: "reduce-unused",
+      label: "Убрать лишнее",
+      detail: "Lighthouse видит заметный лишний код. Сначала отключить лишний виджет/модуль, потом дробить или отложить файл."
+    });
+  }
+
+  if (asset.type === "js" && transferKb >= 80) {
+    return withResourceRisk(asset, {
+      id: "delay-js",
+      label: "Проверить отложенную загрузку",
+      detail: "Тяжелый JS. Если функция не нужна сразу, грузить после взаимодействия/простоя браузера или отключать на этой странице."
+    });
+  }
+
+  if (asset.type === "css" && transferKb >= 20) {
+    return withResourceRisk(asset, {
+      id: "async-css",
+      label: "Разделить/отложить CSS",
+      detail: "Крупный CSS. Оставить критичный минимум, остальное разделить по странице/виджету или грузить после первого рендера."
+    });
+  }
+
+  if (asset.type === "media" && startsEarly && transferKb >= 80) {
+    return withResourceRisk(asset, {
+      id: "optimize-media",
+      label: "Проверить LCP/preload",
+      detail: "Крупное раннее медиа. Если это hero/LCP - preload и правильный размер. Если ниже первого экрана - lazy."
+    });
+  }
+
+  if (asset.type === "media" && transferKb >= 40) {
+    return withResourceRisk(asset, {
+      id: "lazy-media",
+      label: "Сжать или отложить медиа",
+      detail: "Оптимизировать размер, srcset/sizes, WebP/AVIF. Если ресурс ниже первого экрана - loading lazy."
+    });
+  }
+
+  if (asset.type === "font") {
+    return withResourceRisk(asset, {
+      id: "optimize-font",
+      label: "Оптимизировать шрифт",
+      detail: "Оставить нужные начертания, font-display swap, preload только критичного шрифта первого экрана."
+    });
+  }
+
+  if (transferKb <= 10 && !asset.renderBlockingReports && !asset.unusedBytes) {
+    return withResourceRisk(asset, {
+      id: "keep",
+      label: "Оставить",
+      detail: "Небольшой ресурс без явного сигнала блокировки или лишнего кода."
+    });
+  }
+
+  return withResourceRisk(asset, {
+    id: "review",
+    label: "Проверить вручную",
+    detail: "Нет однозначного автоматического решения. Сверить назначение ресурса с первым экраном и интерактивом."
+  });
+}
+
+function sortByAssetImpact(left, right) {
+  return (
+    ((right.renderBlockingMs || 0) - (left.renderBlockingMs || 0)) ||
+    ((right.renderBlockingReports || 0) - (left.renderBlockingReports || 0)) ||
+    ((right.unusedBytes || 0) - (left.unusedBytes || 0)) ||
+    ((right.transferBytes || 0) - (left.transferBytes || 0)) ||
+    String(left.fileName || "").localeCompare(String(right.fileName || ""))
+  );
+}
+
+function sortByTransferThenImpact(left, right) {
+  return (
+    ((right.transferBytes || 0) - (left.transferBytes || 0)) ||
+    ((right.renderBlockingMs || 0) - (left.renderBlockingMs || 0)) ||
+    ((right.unusedBytes || 0) - (left.unusedBytes || 0)) ||
+    String(left.fileName || "").localeCompare(String(right.fileName || ""))
+  );
+}
+
+function assetImpact(assets = []) {
+  return {
+    affectedCount: assets.length,
+    transferBytes: roundByteValue(assets.reduce((sum, asset) => sum + numberOrZero(asset.transferBytes), 0)),
+    resourceBytes: roundByteValue(assets.reduce((sum, asset) => sum + numberOrZero(asset.resourceBytes), 0)),
+    unusedBytes: roundByteValue(assets.reduce((sum, asset) => sum + numberOrZero(asset.unusedBytes), 0)),
+    renderBlockingMs: roundByteValue(assets.reduce((sum, asset) => sum + numberOrZero(asset.renderBlockingMs), 0))
+  };
+}
+
+function compactActionResources(assets = []) {
+  return assets.slice(0, 8).map((asset) => ({
+    url: asset.url,
+    fileName: asset.fileName,
+    type: asset.type,
+    sourceType: asset.sourceType,
+    sourceName: asset.sourceName,
+    transferBytes: asset.transferBytes,
+    resourceBytes: asset.resourceBytes,
+    unusedBytes: asset.unusedBytes,
+    renderBlockingMs: asset.renderBlockingMs,
+    renderBlockingReports: asset.renderBlockingReports,
+    totalReports: asset.totalReports,
+    recommendation: asset.recommendation
+  }));
+}
+
+function aggregateActionRisk(assets = []) {
+  return assets
+    .map((asset) => asset.recommendation?.risk)
+    .filter(Boolean)
+    .sort((left, right) => (RESOURCE_RISK_RANK[right.level] || 0) - (RESOURCE_RISK_RANK[left.level] || 0))[0] || RESOURCE_RISKS.verify;
+}
+
+function buildAction(id, severity, title, reason, fix, assets = []) {
+  const sortedAssets = [...assets].sort(sortByAssetImpact);
+
+  return {
+    id,
+    severity,
+    title,
+    reason,
+    fix,
+    risk: aggregateActionRisk(sortedAssets),
+    impact: assetImpact(assets),
+    resources: compactActionResources(sortedAssets)
+  };
+}
+
+function buildAssetActions(assets = [], groups = [], summary = {}) {
+  const actions = [];
+  const renderBlockingCss = assets
+    .filter((asset) => asset.type === "css" && asset.renderBlockingReports > 0)
+    .sort(sortByAssetImpact);
+  const renderBlockingJs = assets
+    .filter((asset) => asset.type === "js" && asset.renderBlockingReports > 0)
+    .sort(sortByAssetImpact);
+  const elementorAssets = assets
+    .filter((asset) =>
+      assetMatches(asset, ["elementor", "elementor-pro"]) &&
+      !assetMatches(asset, ["royal-elementor-addons", "wpr-", "/royal/"])
+    )
+    .sort(sortByAssetImpact);
+  const royalAssets = assets
+    .filter((asset) => assetMatches(asset, ["royal-elementor-addons", "wpr-", "/royal/"]))
+    .sort(sortByAssetImpact);
+  const fontAssets = assets
+    .filter((asset) => assetMatches(asset, ["font-awesome", "fontawesome", "/fa-", "eicons"]))
+    .sort(sortByAssetImpact);
+  const thirdPartyJs = assets
+    .filter((asset) => asset.type === "js" && asset.sourceType === "third-party")
+    .sort(sortByAssetImpact);
+  const unusedAssets = assets
+    .filter((asset) => asset.unusedBytes >= 10 * 1024)
+    .sort(sortByAssetImpact);
+  const heavyPluginJs = groups
+    .filter((group) =>
+      group.sourceType === "plugin" &&
+      group.jsTransferBytes >= 120 * 1024 &&
+      !String(group.sourceName || "").toLowerCase().includes("elementor")
+    )
+    .flatMap((group) => assets.filter((asset) => asset.type === "js" && asset.sourceKey === group.sourceKey))
+    .sort(sortByAssetImpact);
+
+  if (renderBlockingCss.length) {
+    actions.push(buildAction(
+      "render-blocking-css",
+      "high",
+      "CSS блокирует первый рендер",
+      `${renderBlockingCss.length} CSS-файлов блокируют первый рендер в проанализированных отчетах.`,
+      "Встроить только критичный CSS первого экрана. Некритичный CSS страницы/виджетов грузить позже, но CSS попапа/меню оставить синхронным до проверки мобильного меню.",
+      renderBlockingCss
+    ));
+  }
+
+  if (renderBlockingJs.length) {
+    actions.push(buildAction(
+      "render-blocking-js",
+      "high",
+      "JS блокирует старт страницы",
+      `${renderBlockingJs.length} JS-файлов находятся в критической цепочке запросов.`,
+      "Некритичные скрипты перевести в defer/delay, но не откладывать скрипты меню, попапа, форм и обязательного трекинга до проверки.",
+      renderBlockingJs
+    ));
+  }
+
+  if (elementorAssets.length && (assetImpact(elementorAssets).transferBytes >= 40 * 1024 || renderBlockingCss.some((asset) => assetMatches(asset, ["elementor"])))) {
+    actions.push(buildAction(
+      "elementor-payload",
+      "high",
+      "Elementor CSS/JS на критическом пути",
+      "CSS/JS Elementor, плагинов и страницы виден в загрузке и может доминировать в мобильном первом рендере.",
+      "Перегенерировать CSS Elementor, убрать неиспользуемые секции/виджеты, разделить CSS страницы и откладывать только некритичный CSS после проверки попапа/меню.",
+      elementorAssets
+    ));
+  }
+
+  if (royalAssets.length && assetImpact(royalAssets).transferBytes >= 30 * 1024) {
+    actions.push(buildAction(
+      "royal-addons-payload",
+      "medium",
+      "Royal Addons требует контроля по странице",
+      "Ресурсы Royal присутствуют в мобильной загрузке и могут тянуть больше кода виджетов, чем нужно этой странице.",
+      "Отключить неиспользуемые виджеты/модули Royal или выгружать Royal только на страницах, где он не используется. Не удалять WPR popup/menu, пока на них держится мобильное меню.",
+      royalAssets
+    ));
+  }
+
+  if (fontAssets.length && assetImpact(fontAssets).transferBytes >= 20 * 1024) {
+    actions.push(buildAction(
+      "icon-fonts",
+      "medium",
+      "Иконки и шрифты дорогие для мобильной версии",
+      "Пакеты иконок добавляют CSS, font и script bytes, которые часто блокируют или задерживают первый рендер.",
+      "Видимые иконки заменить на inline SVG или маленький sprite. Font Awesome/eicons отключать только после проверки меню, кнопок и иконок закрытия попапа.",
+      fontAssets
+    ));
+  }
+
+  if (heavyPluginJs.length) {
+    actions.push(buildAction(
+      "heavy-plugin-js",
+      "medium",
+      "Тяжелый JS плагина",
+      "Одна или несколько групп JS плагинов достаточно крупные, чтобы влиять на разбор кода в мобильной версии и готовность интерактива.",
+      "Найти виджет, которому нужен этот пакет. Если функции нет на этой странице или первом экране, убрать виджет, перенести функцию или выгрузить пакет по странице.",
+      heavyPluginJs
+    ));
+  }
+
+  if (thirdPartyJs.length && assetImpact(thirdPartyJs).transferBytes >= 50 * 1024) {
+    actions.push(buildAction(
+      "third-party-js",
+      "medium",
+      "Сторонний JS участвует в загрузке",
+      "Внешние скрипты добавляют сетевую стоимость и стоимость выполнения вне пайплайна ресурсов WordPress.",
+      "Аналитику, чат, карты и виджеты грузить после согласия, простоя браузера или взаимодействия. На старте оставить только критичные теги измерения.",
+      thirdPartyJs
+    ));
+  }
+
+  if (unusedAssets.length && (summary.totalUnusedBytes || assetImpact(unusedAssets).unusedBytes) >= 30 * 1024) {
+    actions.push(buildAction(
+      "unused-css-js",
+      "medium",
+      "Lighthouse видит лишний CSS/JS",
+      "Lighthouse нашел лишние байты в одном или нескольких загруженных CSS/JS-файлах.",
+      "Сначала убрать лишние виджеты/модули. Затем разделить CSS/JS по страницам или грузить лишнюю часть только после взаимодействия.",
+      unusedAssets
+    ));
+  }
+
+  const severityRank = { high: 3, medium: 2, low: 1 };
+
+  return actions
+    .sort((left, right) =>
+      ((severityRank[right.severity] || 0) - (severityRank[left.severity] || 0)) ||
+      ((right.impact.renderBlockingMs || 0) - (left.impact.renderBlockingMs || 0)) ||
+      ((right.impact.transferBytes || 0) - (left.impact.transferBytes || 0))
+    )
+    .slice(0, 8);
+}
+
 function summarizeAssets(assets = [], reportCount = 0) {
   const report = emptyAssetPayloadReport(reportCount);
 
   assets.forEach((asset) => {
-    const bucket = report.summary[asset.type];
+    const bucket = report.summary[asset.type] || report.summary.other;
     bucket.count += 1;
     bucket.transferBytes += asset.transferBytes;
     bucket.resourceBytes += asset.resourceBytes;
@@ -647,7 +1001,7 @@ function summarizeAssets(assets = [], reportCount = 0) {
     bucket.thirdPartyBytes += asset.sourceType === "third-party" ? asset.transferBytes : 0;
   });
 
-  ["css", "js"].forEach((type) => {
+  ASSET_TYPES.forEach((type) => {
     report.summary[type].transferBytes = roundByteValue(report.summary[type].transferBytes);
     report.summary[type].resourceBytes = roundByteValue(report.summary[type].resourceBytes);
     report.summary[type].unusedBytes = roundByteValue(report.summary[type].unusedBytes);
@@ -655,13 +1009,22 @@ function summarizeAssets(assets = [], reportCount = 0) {
   });
 
   report.summary.assetCount = assets.length;
-  report.summary.totalTransferBytes = roundByteValue(report.summary.css.transferBytes + report.summary.js.transferBytes);
-  report.summary.totalResourceBytes = roundByteValue(report.summary.css.resourceBytes + report.summary.js.resourceBytes);
-  report.summary.totalUnusedBytes = roundByteValue(report.summary.css.unusedBytes + report.summary.js.unusedBytes);
-  report.summary.renderBlockingCount = report.summary.css.renderBlockingCount + report.summary.js.renderBlockingCount;
+  report.summary.totalTransferBytes = roundByteValue(ASSET_TYPES.reduce((sum, type) => sum + report.summary[type].transferBytes, 0));
+  report.summary.totalResourceBytes = roundByteValue(ASSET_TYPES.reduce((sum, type) => sum + report.summary[type].resourceBytes, 0));
+  report.summary.totalUnusedBytes = roundByteValue(ASSET_TYPES.reduce((sum, type) => sum + report.summary[type].unusedBytes, 0));
+  report.summary.renderBlockingCount = ASSET_TYPES.reduce((sum, type) => sum + report.summary[type].renderBlockingCount, 0);
+  report.summary.totalThirdPartyBytes = roundByteValue(ASSET_TYPES.reduce((sum, type) => sum + report.summary[type].thirdPartyBytes, 0));
   report.groups = buildAssetGroups(assets);
-  report.css = assets.filter((asset) => asset.type === "css").slice(0, 50);
-  report.js = assets.filter((asset) => asset.type === "js").slice(0, 50);
+  report.actions = buildAssetActions(assets, report.groups, report.summary);
+  report.renderBlocking = assets
+    .filter((asset) => asset.renderBlockingReports > 0 || asset.renderBlockingMs > 0)
+    .sort(sortByAssetImpact)
+    .slice(0, 25);
+  report.js = assets.filter((asset) => asset.type === "js").sort(sortByTransferThenImpact);
+  report.css = assets.filter((asset) => asset.type === "css").sort(sortByTransferThenImpact);
+  report.media = assets.filter((asset) => asset.type === "media").sort(sortByTransferThenImpact);
+  report.fonts = assets.filter((asset) => asset.type === "font").sort(sortByTransferThenImpact);
+  report.other = assets.filter((asset) => asset.type === "other").sort(sortByTransferThenImpact);
 
   return report;
 }
@@ -779,72 +1142,6 @@ function extractAssetPayloadFromReports(reportPaths = []) {
   return summarizeAssets(finalizedAssets, reports.length);
 }
 
-function collectResourceOffenders(auditsOrSeries) {
-  const auditSets = Array.isArray(auditsOrSeries)
-    ? auditsOrSeries.filter(Boolean)
-    : [auditsOrSeries || {}];
-  const offenders = new Map();
-
-  auditSets.forEach((audits) => {
-    const seenUrls = new Set();
-
-    Object.entries(audits).forEach(([auditId, audit]) => {
-      const items = Array.isArray(audit?.details?.items) ? audit.details.items : [];
-      items.forEach((item) => {
-        const url = item.url || item.source?.url || item.request?.url;
-        if (!url) {
-          return;
-        }
-
-        const existing = offenders.get(url) || {
-          url,
-          type: classifyResource(url, auditId),
-          plugin: pluginNameFromUrl(url),
-          wastedMs: 0,
-          wastedBytes: 0,
-          totalBytes: 0,
-          occurrences: 0,
-          audits: new Set()
-        };
-
-        if (!seenUrls.has(url)) {
-          existing.occurrences += 1;
-          seenUrls.add(url);
-        }
-        if (typeof item.wastedMs === "number") {
-          existing.wastedMs = Math.max(existing.wastedMs, item.wastedMs);
-        }
-        if (typeof item.wastedBytes === "number") {
-          existing.wastedBytes = Math.max(existing.wastedBytes, item.wastedBytes);
-        }
-        if (typeof item.totalBytes === "number" || typeof item.transferSize === "number") {
-          existing.totalBytes = Math.max(existing.totalBytes, item.totalBytes || item.transferSize || 0);
-        }
-        existing.audits.add(getAuditTitle(auditId, audit.title || auditId));
-        offenders.set(url, existing);
-      });
-    });
-  });
-
-  return [...offenders.values()]
-    .map((item) => ({
-      ...item,
-      wastedMs: item.wastedMs ? toNumber(item.wastedMs, 0) : null,
-      wastedBytes: item.wastedBytes ? toNumber(item.wastedBytes, 0) : null,
-      totalBytes: item.totalBytes ? toNumber(item.totalBytes, 0) : null,
-      occurrences: item.occurrences || 0,
-      totalReports: auditSets.length,
-      audits: [...item.audits].slice(0, 3)
-    }))
-    .sort((left, right) =>
-      ((right.occurrences || 0) - (left.occurrences || 0)) ||
-      ((right.wastedMs || 0) - (left.wastedMs || 0)) ||
-      ((right.wastedBytes || 0) - (left.wastedBytes || 0)) ||
-      ((right.totalBytes || 0) - (left.totalBytes || 0))
-    )
-    .slice(0, 20);
-}
-
 function readReport(reportPath) {
   if (!reportPath) {
     return null;
@@ -875,22 +1172,6 @@ function extractReportContext(reportPath) {
     screenEmulation: lhr.configSettings?.screenEmulation || null,
     environment: lhr.environment || null
   };
-}
-
-function extractResourceOffendersFromReports(reportPaths = []) {
-  const auditSets = reportPaths
-    .map((reportPath) => readReport(reportPath)?.audits || null)
-    .filter(Boolean);
-
-  if (!auditSets.length) {
-    return [];
-  }
-
-  return collectResourceOffenders(auditSets);
-}
-
-function extractResourceOffendersFromReport(reportPath) {
-  return extractResourceOffendersFromReports([reportPath]);
 }
 
 function extractDiagnosticsFromReports(reportPaths = []) {
@@ -975,7 +1256,5 @@ module.exports = {
   extractDiagnosticsFromReports,
   extractDiagnosticsFromReport,
   extractReportContext,
-  extractAssetPayloadFromReports,
-  extractResourceOffendersFromReports,
-  extractResourceOffendersFromReport
+  extractAssetPayloadFromReports
 };

@@ -141,6 +141,36 @@ test("extractAssetPayloadFromReports aggregates CSS and JS network payload", () 
               priority: "Low",
               networkRequestTime: 20,
               networkEndTime: 45
+            },
+            {
+              url: "https://site.test/wp-content/uploads/hero.webp",
+              transferSize: 90000,
+              resourceSize: 130000,
+              resourceType: "Image",
+              mimeType: "image/webp",
+              priority: "High",
+              networkRequestTime: 30,
+              networkEndTime: 90
+            },
+            {
+              url: "https://site.test/wp-content/themes/site/assets/fonts/site.woff2",
+              transferSize: 18000,
+              resourceSize: 48000,
+              resourceType: "Font",
+              mimeType: "font/woff2",
+              priority: "High",
+              networkRequestTime: 40,
+              networkEndTime: 80
+            },
+            {
+              url: "https://site.test/wp-json/contact",
+              transferSize: 1200,
+              resourceSize: 4000,
+              resourceType: "Fetch",
+              mimeType: "application/json",
+              priority: "Low",
+              networkRequestTime: 50,
+              networkEndTime: 60
             }
           ]
         }
@@ -187,18 +217,30 @@ test("extractAssetPayloadFromReports aggregates CSS and JS network payload", () 
     const report = extractAssetPayloadFromReports(["/results/stats-payload-fixture/run-1.json"]);
 
     assert.equal(report.summary.reportCount, 1);
-    assert.equal(report.summary.assetCount, 3);
+    assert.equal(report.summary.assetCount, 6);
     assert.equal(report.summary.css.count, 2);
     assert.equal(report.summary.css.transferBytes, 15000);
     assert.equal(report.summary.css.renderBlockingCount, 1);
     assert.equal(report.summary.js.count, 1);
     assert.equal(report.summary.js.thirdPartyBytes, 7000);
+    assert.equal(report.summary.media.count, 1);
+    assert.equal(report.summary.font.count, 1);
+    assert.equal(report.summary.other.count, 1);
     assert.equal(report.summary.totalUnusedBytes, 9000);
     assert.equal(report.css[0].sourceType, "plugin");
     assert.equal(report.css[0].sourceName, "royal");
     assert.equal(report.css[0].renderBlockingReports, 1);
     assert.equal(report.js[0].sourceType, "third-party");
+    assert.equal(report.media[0].fileName, "hero.webp");
+    assert.equal(report.fonts[0].recommendation.id, "optimize-font");
+    assert.equal(report.fonts[0].recommendation.risk.level, "verify");
+    assert.equal(report.other[0].recommendation.id, "keep");
+    assert.equal(report.other[0].recommendation.risk.level, "safe");
     assert.ok(report.groups.some((group) => group.sourceType === "elementor" && group.cssCount === 1));
+    assert.equal(report.renderBlocking[0].sourceName, "royal");
+    assert.ok(report.actions.some((action) => action.id === "render-blocking-css"));
+    assert.equal(report.actions.find((action) => action.id === "render-blocking-css").risk.level, "fragile");
+    assert.ok(report.actions.find((action) => action.id === "render-blocking-css").resources[0].url.includes("frontend.css"));
   } finally {
     fs.rmSync(fixtureDir, { recursive: true, force: true });
   }
