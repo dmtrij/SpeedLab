@@ -2697,7 +2697,7 @@ textarea::placeholder {
 
 .asset-action-row {
   display: grid;
-  grid-template-columns: minmax(250px, 0.42fr) minmax(0, 1fr);
+  grid-template-columns: minmax(330px, 0.34fr) minmax(0, 1fr);
   gap: 10px;
   align-items: stretch;
   min-width: 0;
@@ -2723,8 +2723,12 @@ textarea::placeholder {
   display: grid;
   gap: 8px;
   align-content: start;
+  align-self: stretch;
   min-width: 0;
-  padding: 2px 0;
+  padding: 9px 11px;
+  border-radius: 11px;
+  background: rgba(5, 14, 25, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.065);
 }
 
 .asset-action-main {
@@ -2735,16 +2739,17 @@ textarea::placeholder {
 
 .asset-action-title {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: center;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 5px 8px;
+  align-items: start;
 }
 
 .asset-action-title-badges {
   display: flex;
   gap: 5px;
-  align-items: center;
-  justify-content: flex-end;
+  grid-column: 1 / -1;
+  align-items: flex-start;
+  justify-content: flex-start;
   min-width: 0;
 }
 
@@ -2841,7 +2846,8 @@ textarea::placeholder {
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 8px;
   min-height: 100%;
-  align-items: center;
+  align-content: start;
+  align-items: start;
   padding: 9px 11px;
   cursor: pointer;
   list-style: none;
@@ -2865,6 +2871,7 @@ textarea::placeholder {
   font-size: 0.86rem;
   font-weight: 900;
   line-height: 1;
+  align-self: start;
 }
 
 .asset-action-resource-box[open] summary {
