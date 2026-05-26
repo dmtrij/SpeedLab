@@ -2697,8 +2697,11 @@ textarea::placeholder {
 
 .asset-action-row {
   display: grid;
-  grid-template-columns: minmax(240px, 1.25fr) minmax(150px, 0.55fr) minmax(260px, 1fr);
-  gap: 10px;
+  grid-template-areas:
+    "main resources"
+    "impact resources";
+  grid-template-columns: minmax(300px, 0.8fr) minmax(460px, 1.35fr);
+  gap: 8px 12px;
   align-items: start;
   min-width: 0;
   padding: 9px;
@@ -2720,6 +2723,7 @@ textarea::placeholder {
 }
 
 .asset-action-main {
+  grid-area: main;
   display: grid;
   gap: 5px;
   min-width: 0;
@@ -2806,6 +2810,7 @@ textarea::placeholder {
 }
 
 .asset-action-impact {
+  grid-area: impact;
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
@@ -2818,6 +2823,7 @@ textarea::placeholder {
 }
 
 .asset-action-resource-box {
+  grid-area: resources;
   min-width: 0;
 }
 
@@ -3315,6 +3321,10 @@ textarea::placeholder {
 
   .asset-action-row {
     grid-template-columns: 1fr;
+    grid-template-areas:
+      "main"
+      "impact"
+      "resources";
   }
 
   .run-context-grid {
