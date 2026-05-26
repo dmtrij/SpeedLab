@@ -1044,9 +1044,14 @@
               const hiddenCount = Math.max(0, (action.resources || []).length - resources.length);
               const severity = action.severity || "medium";
 
+              const resourceSummary = resources[0]
+                ? `${resources.length} из ${(action.resources || []).length} файлов · ${resources[0].fileName || resources[0].url || "resource"}`
+                : "Файлы не найдены";
+
               return `
                 <article class="asset-action-row severity-${escapeHtml(severity)}">
-                  <div class="asset-action-main">
+                  <div class="asset-action-copy">
+                    <div class="asset-action-main">
                     <div class="asset-action-title">
                       <span>${escapeHtml(`#${index + 1}`)}</span>
                       <strong>${escapeHtml(copy.title || action.title)}</strong>
@@ -1056,21 +1061,26 @@
                       </div>
                     </div>
                     <p>${escapeHtml(copy.fix || action.fix)}</p>
+                    </div>
+                    <div class="asset-action-impact">
+                      <span>${escapeHtml(action.impact?.affectedCount || 0)} файлов</span>
+                      <span>${escapeHtml(bytesLabel(action.impact?.transferBytes || 0))}</span>
+                      ${action.impact?.renderBlockingMs ? `<span>${escapeHtml(Math.round(action.impact.renderBlockingMs))} ms блокировка</span>` : ""}
+                      ${action.impact?.unusedBytes ? `<span>${escapeHtml(bytesLabel(action.impact.unusedBytes))} лишнее</span>` : ""}
+                    </div>
                   </div>
-                  <div class="asset-action-impact">
-                    <span>${escapeHtml(action.impact?.affectedCount || 0)} файлов</span>
-                    <span>${escapeHtml(bytesLabel(action.impact?.transferBytes || 0))}</span>
-                    ${action.impact?.renderBlockingMs ? `<span>${escapeHtml(Math.round(action.impact.renderBlockingMs))} ms блокировка</span>` : ""}
-                    ${action.impact?.unusedBytes ? `<span>${escapeHtml(bytesLabel(action.impact.unusedBytes))} лишнее</span>` : ""}
-                  </div>
-                  <div class="asset-action-resource-box">
+                  <details class="asset-action-resource-box">
+                    <summary>
+                      <span>Ресурсы</span>
+                      <strong>${escapeHtml(resourceSummary)}</strong>
+                    </summary>
                     ${resources.length ? `
                       <ol class="asset-action-resources">
                         ${resources.map(renderActionResource).join("")}
                       </ol>
                       ${hiddenCount ? `<div class="asset-action-more">+${escapeHtml(hiddenCount)} файлов в полном списке</div>` : ""}
                     ` : `<div class="asset-action-more">Нет конкретных файлов в данных Lighthouse</div>`}
-                  </div>
+                  </details>
                 </article>
               `;
             }).join("")}

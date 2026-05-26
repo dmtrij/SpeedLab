@@ -2697,12 +2697,9 @@ textarea::placeholder {
 
 .asset-action-row {
   display: grid;
-  grid-template-areas:
-    "main resources"
-    "impact resources";
-  grid-template-columns: minmax(300px, 0.8fr) minmax(460px, 1.35fr);
-  gap: 8px 12px;
-  align-items: start;
+  grid-template-columns: minmax(250px, 0.42fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
   min-width: 0;
   padding: 9px;
   border-radius: 14px;
@@ -2722,8 +2719,15 @@ textarea::placeholder {
   border-color: rgba(111, 226, 196, 0.18);
 }
 
+.asset-action-copy {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-width: 0;
+  padding: 2px 0;
+}
+
 .asset-action-main {
-  grid-area: main;
   display: grid;
   gap: 5px;
   min-width: 0;
@@ -2810,7 +2814,6 @@ textarea::placeholder {
 }
 
 .asset-action-impact {
-  grid-area: impact;
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
@@ -2823,15 +2826,79 @@ textarea::placeholder {
 }
 
 .asset-action-resource-box {
-  grid-area: resources;
+  display: grid;
+  align-self: stretch;
   min-width: 0;
+  overflow: hidden;
+  border-radius: 11px;
+  background: rgba(5, 14, 25, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.065);
+}
+
+.asset-action-resource-box summary {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  min-height: 100%;
+  align-items: center;
+  padding: 9px 11px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.asset-action-resource-box summary::-webkit-details-marker {
+  display: none;
+}
+
+.asset-action-resource-box summary::after {
+  content: "+";
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(12, 27, 48, 0.92);
+  border: 1px solid rgba(142, 168, 205, 0.18);
+  color: #9fb1cd;
+  font-size: 0.86rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.asset-action-resource-box[open] summary {
+  min-height: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.asset-action-resource-box[open] summary::after {
+  content: "-";
+}
+
+.asset-action-resource-box summary span {
+  color: #8df1d7;
+  font-size: 0.65rem;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.asset-action-resource-box summary strong {
+  min-width: 0;
+  color: #dce7f7;
+  font-size: 0.72rem;
+  font-weight: 850;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .asset-action-resources {
   display: grid;
   gap: 4px;
   margin: 0;
-  padding: 0;
+  padding: 8px 8px 0;
   list-style: none;
 }
 
@@ -2842,7 +2909,7 @@ textarea::placeholder {
   min-width: 0;
   padding: 6px 7px;
   border-radius: 10px;
-  background: rgba(5, 14, 25, 0.5);
+  background: rgba(7, 18, 32, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.065);
 }
 
@@ -2906,6 +2973,7 @@ textarea::placeholder {
 }
 
 .asset-action-more {
+  padding: 3px 9px 8px;
   color: var(--muted);
   font-size: 0.68rem;
 }
@@ -3321,10 +3389,7 @@ textarea::placeholder {
 
   .asset-action-row {
     grid-template-columns: 1fr;
-    grid-template-areas:
-      "main"
-      "impact"
-      "resources";
+    align-items: start;
   }
 
   .run-context-grid {
