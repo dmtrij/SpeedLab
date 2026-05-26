@@ -114,14 +114,17 @@ The UI will show:
 
 - progress bar
 - current status
-- live text log
-- impact-first optimization plan
 - summary cards after completion
-- accordion sections with metrics, comparison, diagnostics, per-run rows, and raw JSON links
+- median metrics and comparison with the selected baseline
+- full `Network inventory` grouped by JS, CSS, media, fonts, and other resources
+- filters and quick slices for heavy, blocking, unused, media, and font/icon resources
+- run quality: unique snapshots, duplicate count, and PSI repeat warnings
+- a concrete resource action plan based on the files actually found in the report
 
 If another test is already running, the next launch is added to the queue instead of failing.
 You can cancel queued or active tests from the UI, and retry a finished test with the same settings.
 If you run PSI with more than one request, SpeedLab will still mark any duplicate snapshots, but it now retries exact duplicates with a cache-busting URL before saving the run.
+If Google PSI returns a retryable transient error such as `Something went wrong`, SpeedLab retries that request once with a fresh cache-busting URL. Quota and API key errors are left visible.
 
 ## History and detail routes
 
@@ -209,7 +212,7 @@ Rules:
 - `Worse`: score decreased by `3+` or LCP got worse by `0.3s+`
 - `Noise`: changes stayed below those thresholds
 
-## Optimization plan
+## Network inventory and optimization
 
 SpeedLab builds an internal optimization model from raw Lighthouse/PSI audits before rendering the report.
 The model groups resources into work items such as:
@@ -225,7 +228,7 @@ The model groups resources into work items such as:
 
 The UI and Markdown export sort these work items by expected impact, not by file count. LCP, TBT, FCP, render-blocking time, repeated occurrences across runs, transfer weight, confidence, and implementation risk all affect priority.
 
-Existing diagnostics and heavy-resource tables remain available; the optimization plan is an additional layer that turns raw audits into an ordered work plan.
+The visible detail report now focuses on the full network inventory: every detected script, stylesheet, media file, font, and other request is listed from the Lighthouse/PSI network data. Markdown export keeps the higher-level optimization plan for sharing a compact action list.
 
 ## CLI single run
 

@@ -1,6 +1,6 @@
 # SpeedLab Test Plan
 
-Updated: 2026-05-19
+Updated: 2026-05-26
 
 ## Goal
 
@@ -80,6 +80,30 @@ If you only want the minimum useful dataset, run:
 - R2
 - R3
 - R5
+
+## Current practical batch
+
+Use this batch when the goal is to validate SpeedLab itself on one representative public URL before running a broader benchmark library.
+
+| Resource ID | Page type | URL | Required packs |
+|---|---|---|---|
+| R1 | Representative page | `[fill]` | A, B, C, D |
+
+For R1, run in this exact order:
+
+1. `Local Lighthouse`, `mobile`, `5` runs, warmup `on`.
+2. `Local Lighthouse`, `desktop`, `5` runs, warmup `on`.
+3. `Google PSI API`, `mobile`, `1` run.
+4. `Google PSI API`, `mobile`, `3` runs only if the single PSI result looks suspicious or needs comparison with PageSpeed.
+
+Use notes:
+
+- `speedlab-qa | R1 | local | mobile | 2026-05-26`
+- `speedlab-qa | R1 | local | desktop | 2026-05-26`
+- `speedlab-qa | R1 | psi | mobile | 2026-05-26`
+- `speedlab-qa | R1 | psi-consistency | mobile | 2026-05-26`
+
+Do not treat this QA URL as a customer optimization target. Its purpose is to verify that SpeedLab launches runs, detects duplicate PSI snapshots, renders the report, and exports resource data correctly.
 
 ## Run packs
 
