@@ -12,7 +12,6 @@
       METRIC_LABELS,
       bytesLabel,
       comparisonTone,
-      diagnosticGroup,
       escapeHtml,
       formatDate,
       formatDelta,
@@ -42,7 +41,6 @@
     [
       [bytesLabel, "bytesLabel"],
       [comparisonTone, "comparisonTone"],
-      [diagnosticGroup, "diagnosticGroup"],
       [escapeHtml, "escapeHtml"],
       [formatDate, "formatDate"],
       [formatDelta, "formatDelta"],
@@ -150,10 +148,10 @@
       return `
         <article class="metric-compact ${tone}">
           <div class="metric-compact-top">
-            <div>
-              <strong>${escapeHtml(config.description)}</strong>
-              <small>${METRIC_LABELS[metric]}</small>
-            </div>
+            <strong class="metric-compact-title">
+              <span>${METRIC_LABELS[metric]}</span>
+              <small>${escapeHtml(config.description)}</small>
+            </strong>
             <span>${escapeHtml(formatMetric(metric, value))}</span>
           </div>
           <div class="metric-scale">
@@ -163,17 +161,106 @@
       `;
     }
 
-    function renderAverageComparisonCard(comparison, runs) {
-      const metrics = ["score", "fcp", "lcp", "si", "tbt", "cls", "ttfb"];
+    function getSerializedMedianMetric(test, metric) {
+      if (!test) {
+        return null;
+      }
 
-      if (!comparison.hasPrevious) {
+      switch (metric) {
+        case "score":
+          return test.medianScore;
+        case "fcp":
+          return test.medianFcp;
+        case "lcp":
+          return test.medianLcp;
+        case "si":
+          return test.medianSi;
+        case "tbt":
+          return test.medianTbt;
+        case "cls":
+          return test.medianCls;
+        case "ttfb":
+          return test.medianTtfb;
+        default:
+          return null;
+      }
+    }
+
+    function renderComparisonQualityNote(comparisonQuality) {
+      if (!comparisonQuality) {
+        return "";
+      }
+
+      const tone = ["success", "info", "neutral", "warning", "muted"].includes(comparisonQuality.tone)
+        ? comparisonQuality.tone
+        : "neutral";
+
+      return `
+        <div class="comparison-quality-note tone-${escapeHtml(tone)}">
+          <div class="comparison-quality-note-head">
+            <strong>${escapeHtml(comparisonQuality.label || "-")}</strong>
+            <em>${escapeHtml(`${comparisonQuality.score || 0}/100`)}</em>
+          </div>
+          <span>${escapeHtml(comparisonQuality.summary || "")}</span>
+        </div>
+      `;
+    }
+
+    function renderAverageComparisonCard(comparison, runs, test, baselineTests = [], comparisonQuality = null) {
+      const metrics = ["score", "fcp", "lcp", "si", "tbt", "cls", "ttfb"];
+      const historyTests = baselineTests.slice(0, 3).reverse();
+      const latestPrevious = baselineTests[0] || null;
+      const columnTests = [...historyTests, test];
+
+      if (!comparison.hasPrevious && !historyTests.length) {
         return `
           <article class="compact-compare-card half">
             <div class="overview-head">
               <h3>\u041c\u0435\u0434\u0438\u0430\u043d\u0430 vs \u043f\u0440\u0435\u0434\u044b\u0434\u0443\u0449\u0438\u0439</h3>
               <small>${UI.noPrevious}</small>
             </div>
+            ${renderComparisonQualityNote(comparisonQuality)}
             <p>${UI.noPrevText}</p>
+          </article>
+        `;
+      }
+
+      if (historyTests.length) {
+        return `
+          <article class="compact-compare-card half median-history-card">
+            <div class="overview-head">
+              <h3>${historyTests.length > 1 ? "Медианы vs предыдущие" : "Медиана vs предыдущий"}</h3>
+              <small>${escapeHtml(verdictLabel(comparison.verdict))}</small>
+            </div>
+            ${renderComparisonQualityNote(comparisonQuality)}
+            <div class="median-history-head" style="--median-history-count:${columnTests.length};">
+              <span></span>
+              ${columnTests.map((item, index) => `
+                <strong class="${index > 0 ? "with-divider" : ""}" title="${escapeHtml(formatDate(item.completedAt || item.createdAt))}">
+                  ${item.id === test.id ? "Сейчас" : `#${escapeHtml(item.id)}`}
+                </strong>
+              `).join("")}
+              <em>Δ</em>
+            </div>
+            <div class="comparison-list dense median-history-list">
+              ${metrics.map((metric) => {
+                const currentValue = getSerializedMedianMetric(test, metric);
+                const previousValue = getSerializedMedianMetric(latestPrevious, metric);
+                const diff = currentValue == null || previousValue == null ? null : currentValue - previousValue;
+                const tone = comparisonTone(metric, diff);
+                return `
+                  <div class="comparison-list-row median-history-row ${tone}" style="--median-history-count:${columnTests.length};">
+                    <strong>${METRIC_LABELS[metric]}</strong>
+                    ${columnTests.map((item, index) => `
+                      <span class="median-history-value ${index > 0 ? "with-divider" : ""}">
+                        ${escapeHtml(formatMetric(metric, getSerializedMedianMetric(item, metric)))}
+                      </span>
+                    `).join("")}
+                    <em>${escapeHtml(formatDelta(metric, diff))}</em>
+                  </div>
+                `;
+              }).join("")}
+            </div>
           </article>
         `;
       }
@@ -184,6 +271,7 @@
             <h3>\u041c\u0435\u0434\u0438\u0430\u043d\u0430 vs \u043f\u0440\u0435\u0434\u044b\u0434\u0443\u0449\u0438\u0439</h3>
             <small>${escapeHtml(verdictLabel(comparison.verdict))}</small>
           </div>
+          ${renderComparisonQualityNote(comparisonQuality)}
           <div class="comparison-list dense">
             ${metrics.map((metric) => {
               const previous = comparison.metrics[metric]?.previous;
@@ -207,7 +295,7 @@
       `;
     }
 
-    function renderScoreCard(test, comparison, runModeText, uniqueRuns, runCount) {
+    function renderScoreCard(test, comparison) {
       const safeScore = Math.max(0, Math.min(100, Number(test.medianScore || 0)));
       const tone = metricTone("score", safeScore);
       const gaugeColor = tone === "good" ? "#2fd39f" : tone === "warn" ? "#ffb74f" : "#ff6e7d";
@@ -224,15 +312,15 @@
       const sheenGradientId = `${gaugeIdBase}-sheen-gradient`;
       const gearConfig = {
         center: 70,
-        toothCount: 28,
-        toothX: 66,
-        toothY: -3,
-        toothWidth: 8,
-        toothHeight: 22,
-        slotX: 67,
-        slotY: 9,
-        slotWidth: 6,
-        slotHeight: 15
+        toothCount: 20,
+        toothX: 65,
+        toothY: 3,
+        toothWidth: 10,
+        toothHeight: 10,
+        slotX: 66.5,
+        slotY: 13,
+        slotWidth: 7,
+        slotHeight: 6
       };
       const gearStep = 360 / gearConfig.toothCount;
       const gearTeeth = Array.from({ length: gearConfig.toothCount }, (_, index) => `
@@ -296,13 +384,10 @@
           </div>
           <div class="compact-score-copy">
             <div class="score-facts">
-              <span class="status-chip ${verdictClass(comparison.verdict)}">${escapeHtml(verdictLabel(comparison.verdict))}</span>
+              <span class="${verdictClass(comparison.verdict)}">${escapeHtml(verdictLabel(comparison.verdict))}</span>
               <strong>${escapeHtml(scoreQuality)}</strong>
               <em>${comparison.hasPrevious ? `\u041a \u0431\u0430\u0437\u0435: ${escapeHtml(formatDelta("score", scoreDelta))}` : "\u0411\u0435\u0437 \u0431\u0430\u0437\u044b"}</em>
             </div>
-            <p>${escapeHtml(runModeText)}</p>
-            <p>${UI.uniqueResults}: ${uniqueRuns} / ${runCount}</p>
-            <p>${escapeHtml(test.note || "-")}</p>
           </div>
         </article>
       `;
@@ -318,47 +403,6 @@
           </div>
           <div class="metric-compact-list">
             ${metrics.map((metric) => renderMetricScale(metric, getTestMetric(test, metric))).join("")}
-          </div>
-        </article>
-      `;
-    }
-
-    function renderPrevComparisonCard(comparison) {
-      if (!comparison.hasPrevious) {
-        return `
-          <article class="compact-compare-card">
-            <div class="overview-head">
-              <h3>${UI.comparePrev}</h3>
-              <small>${UI.noPrevious}</small>
-            </div>
-            <p>${UI.noPrevText}</p>
-          </article>
-        `;
-      }
-
-      const metrics = ["score", "fcp", "lcp", "si", "tbt", "cls", "ttfb"];
-      return `
-        <article class="compact-compare-card">
-          <div class="overview-head">
-            <h3>${UI.comparePrev}</h3>
-            <small>${escapeHtml(verdictLabel(comparison.verdict))}</small>
-          </div>
-          <div class="comparison-list">
-            ${metrics.map((metric) => {
-              const item = comparison.metrics[metric];
-              const tone = comparisonTone(metric, item.diff);
-              return `
-                <div class="comparison-list-row ${tone}">
-                  <strong>${METRIC_LABELS[metric]}</strong>
-                  <div class="comparison-value-pair">
-                    <span>${escapeHtml(formatMetric(metric, item.previous))}</span>
-                    <span class="comparison-arrow">\u2192</span>
-                    <span>${escapeHtml(formatMetric(metric, item.current))}</span>
-                  </div>
-                  <em>${escapeHtml(formatDelta(metric, item.diff))}</em>
-                </div>
-              `;
-            }).join("")}
           </div>
         </article>
       `;
@@ -508,31 +552,114 @@
       `;
     }
 
-    function renderCompactSummary(test, comparison, uniqueRuns, runCount) {
-      const items = [
-        [UI.finalVerdict, verdictLabel(comparison.verdict)],
-        [UI.runsShort, `${test.runsCompleted} / ${test.runsRequested}`],
-        [UI.uniqueResults, `${uniqueRuns} / ${runCount}`],
-        [UI.comment, test.note || "-"],
-        [UI.created, formatDate(test.createdAt)],
-        [UI.finished, formatDate(test.completedAt)]
-      ];
+    function stabilityState(metricStats, runs) {
+      const scoreSpread = metricStats.score?.spread;
+      const lcpSpread = metricStats.lcp?.spread;
+      const clsSpread = metricStats.cls?.spread;
+      const noisy = [
+        scoreSpread != null && scoreSpread >= 5,
+        lcpSpread != null && lcpSpread >= 500,
+        clsSpread != null && clsSpread >= 0.05
+      ].some(Boolean);
+
+      return {
+        verdict: runs.length < 3
+          ? "Мало данных"
+          : (noisy ? "Серия шумная" : "Серия стабильная"),
+        tone: runs.length < 3 ? "neutral" : (noisy ? "warning" : "success"),
+        spread: [
+          scoreSpread != null ? `Оценка ${formatMetric("score", scoreSpread)}` : "",
+          lcpSpread != null ? `LCP ${formatMetric("lcp", lcpSpread)}` : "",
+          clsSpread != null ? `CLS ${formatMetric("cls", clsSpread)}` : ""
+        ].filter(Boolean).join(" / ")
+      };
+    }
+
+    function isUsefulNote(note = "", test) {
+      const value = String(note || "").trim();
+      const normalized = value.toLowerCase();
+      const runner = String(test.runnerLabel || runnerLabel(test.runner)).toLowerCase();
+
+      if (!value) {
+        return false;
+      }
+
+      return ![
+        "psi api: серия",
+        "psi api",
+        "локальный lighthouse",
+        runner
+      ].includes(normalized);
+    }
+
+    function renderContextItems(items) {
+      const visibleItems = items.filter(([, value]) => value != null && value !== "");
+
+      if (!visibleItems.length) {
+        return "";
+      }
 
       return `
-        <section class="info-section priority-summary">
-          <div class="info-section-head">
-            <h3>\u0418\u0442\u043e\u0433 \u0442\u0435\u0441\u0442\u0430</h3>
-            <span>\u0433\u043b\u0430\u0432\u043d\u043e\u0435</span>
-          </div>
-          <div class="compact-summary-strip">
-          ${items.map(([label, value]) => `
+        <dl class="run-context-list">
+          ${visibleItems.map(([label, value]) => `
             <div>
-              <span>${escapeHtml(label)}</span>
-              <strong>${escapeHtml(value)}</strong>
+              <dt>${escapeHtml(label)}</dt>
+              <dd>${escapeHtml(value)}</dd>
             </div>
           `).join("")}
-          </div>
-        </section>
+        </dl>
+      `;
+    }
+
+    function renderRunQualitySummary(test, runQuality, uniqueRuns, runCount) {
+      if (!runQuality) {
+        return "";
+      }
+
+      const tone = ["high", "medium", "low", "muted"].includes(runQuality.reliabilityTone)
+        ? runQuality.reliabilityTone
+        : "medium";
+      const totalRuns = runQuality.totalRuns ?? runCount ?? 0;
+      const qualityScore = runQuality.reliabilityScore ?? 0;
+      const duplicateMap = Array.isArray(runQuality.duplicates) && runQuality.duplicates.length
+        ? runQuality.duplicates.slice(0, 4).map((item) => `#${item.runIndex} -> #${item.duplicateOf}`).join(", ")
+        : "нет";
+      const hiddenDuplicates = Math.max(0, (runQuality.duplicates?.length || 0) - 4);
+      const mitigation = runQuality.mitigation || {};
+      const mitigationParts = [
+        mitigation.cacheBustCount ? `cache-bust: ${mitigation.cacheBustCount}` : "",
+        mitigation.decoyCount ? `decoy: ${mitigation.decoyCount}` : "",
+        mitigation.retryCount ? `повторных попыток: ${mitigation.retryCount}` : ""
+      ].filter(Boolean);
+      const mitigationDetail = test.runner === "psi"
+        ? (mitigationParts.length ? mitigationParts.join(" / ") : "дополнительная защита не потребовалась")
+        : "локальные прогоны без PSI-кеша";
+      const mitigationTitle = test.runner === "psi" ? "Защита PSI" : "Среда запуска";
+      const mitigationLabel = test.runner === "psi" ? (mitigation.label || "-") : "Локально";
+
+      return `
+        <div class="run-quality-summary tone-${escapeHtml(tone)}">
+          <article class="run-quality-card">
+            <span>Надежность</span>
+            <strong>${escapeHtml(runQuality.reliabilityLabel || "-")}</strong>
+            <small>${escapeHtml(`оценка ${qualityScore}/100`)}</small>
+          </article>
+          <article class="run-quality-card">
+            <span>Уникальные снимки</span>
+            <strong>${escapeHtml(runQuality.uniqueRuns || 0)} / ${escapeHtml(totalRuns)}</strong>
+            <small>${escapeHtml(`${runQuality.uniquePercent || 0}% серии`)}</small>
+          </article>
+          <article class="run-quality-card">
+            <span>Повторы</span>
+            <strong>${escapeHtml(runQuality.duplicateCount || 0)}</strong>
+            <small>${escapeHtml(hiddenDuplicates ? `${duplicateMap}, еще ${hiddenDuplicates}` : duplicateMap)}</small>
+          </article>
+          <article class="run-quality-card">
+            <span>${escapeHtml(mitigationTitle)}</span>
+            <strong>${escapeHtml(mitigationLabel)}</strong>
+            <small>${escapeHtml(mitigationDetail)}</small>
+          </article>
+        </div>
       `;
     }
 
@@ -642,235 +769,20 @@
       `;
     }
 
-    function renderMetricStatsTable(metricStats) {
-      const metrics = ["score", "fcp", "lcp", "si", "tbt", "cls", "ttfb"];
-      return `
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>${UI.state}</th>
-                <th>${UI.median}</th>
-                <th>Min</th>
-                <th>Max</th>
-                <th>${UI.spread}</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${metrics.map((metric) => `
-                <tr>
-                  <td>${METRIC_LABELS[metric]}</td>
-                  <td>${escapeHtml(formatMetric(metric, metricStats[metric]?.median))}</td>
-                  <td>${escapeHtml(formatMetric(metric, metricStats[metric]?.min))}</td>
-                  <td>${escapeHtml(formatMetric(metric, metricStats[metric]?.max))}</td>
-                  <td>${escapeHtml(formatMetric(metric, metricStats[metric]?.spread))}</td>
-                </tr>
-              `).join("")}
-            </tbody>
-          </table>
-        </div>
-      `;
-    }
-
-    function renderComparisonTable(comparison) {
-      if (!comparison.hasPrevious) {
-        return `<p>${UI.noPrevText}</p>`;
-      }
-      const metrics = ["score", "fcp", "lcp", "si", "tbt", "cls", "ttfb"];
-      return `
-        <div class="verdict-strip ${verdictClass(comparison.verdict)}">
-          ${UI.verdict}: ${escapeHtml(verdictLabel(comparison.verdict))}
-        </div>
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>${UI.state}</th>
-                <th>\u0411\u044b\u043b\u043e</th>
-                <th>\u0421\u0442\u0430\u043b\u043e</th>
-                <th>\u0414\u0435\u043b\u044c\u0442\u0430</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${metrics.map((metric) => `
-                <tr>
-                  <td>${METRIC_LABELS[metric]}</td>
-                  <td>${escapeHtml(formatMetric(metric, comparison.metrics[metric].previous))}</td>
-                  <td>${escapeHtml(formatMetric(metric, comparison.metrics[metric].current))}</td>
-                  <td>${escapeHtml(formatDelta(metric, comparison.metrics[metric].diff))}</td>
-                </tr>
-              `).join("")}
-            </tbody>
-          </table>
-        </div>
-      `;
-    }
-
-    function renderRunsTable(runs) {
-      if (!runs.length) {
-        return `<p>${UI.noRunsYet}</p>`;
-      }
-      return `
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>${UI.runsShort}</th>
-                <th>\u041e\u0446\u0435\u043d\u043a\u0430</th>
-                <th>FCP</th>
-                <th>LCP</th>
-                <th>SI</th>
-                <th>TBT</th>
-                <th>CLS</th>
-                <th>TTFB</th>
-                <th>JSON</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${runs.map((run) => `
-                <tr>
-                  <td>${run.runIndex}</td>
-                  <td>${escapeHtml(formatMetric("score", run.score))}</td>
-                  <td>${escapeHtml(formatMetric("fcp", run.fcp))}</td>
-                  <td>${escapeHtml(formatMetric("lcp", run.lcp))}</td>
-                  <td>${escapeHtml(formatMetric("si", run.si))}</td>
-                  <td>${escapeHtml(formatMetric("tbt", run.tbt))}</td>
-                  <td>${escapeHtml(formatMetric("cls", run.cls))}</td>
-                  <td>${escapeHtml(formatMetric("ttfb", run.ttfb))}</td>
-                  <td><a href="${escapeHtml(run.jsonPath)}" target="_blank" rel="noreferrer">${UI.openJson}</a></td>
-                </tr>
-              `).join("")}
-            </tbody>
-          </table>
-        </div>
-      `;
-    }
-
-    function diagnosticBadgeLabel(item) {
-      const parts = [];
-
-      if (item?.totalReports > 1) {
-        parts.push(`${item.occurrences}/${item.totalReports}`);
-      }
-      if (item?.displayValue) {
-        parts.push(item.displayValue);
-      } else if (item?.score != null) {
-        parts.push(`score ${item.score}`);
-      }
-
-      return parts.join(" | ");
-    }
-
-    function offenderAuditLabel(item) {
-      const parts = [];
-
-      if (item?.totalReports > 1) {
-        parts.push(`${item.occurrences}/${item.totalReports}`);
-      }
-      if (item?.audits?.length) {
-        parts.push(item.audits.join(", "));
-      }
-
-      return parts.join(" | ") || "-";
-    }
-
-    function renderDiagnostics(diagnostics) {
-      if (!diagnostics.length) {
-        return `<p>${UI.diagnosticsEmpty}</p>`;
-      }
-      const groups = diagnostics.reduce((acc, item) => {
-        const group = diagnosticGroup(item.id);
-        acc[group] = acc[group] || [];
-        acc[group].push(item);
-        return acc;
-      }, {});
-
-      return `
-        <div class="diagnostic-groups">
-          ${Object.entries(groups).map(([group, items]) => `
-            <section class="diagnostic-group">
-              <h3>${escapeHtml(group)}</h3>
-              <div class="diagnostic-list">
-                ${items.map((item) => `
-                  <article class="diagnostic-item">
-                    <div class="diagnostic-head">
-                      <strong>${escapeHtml(item.title)}</strong>
-                      <span class="status-chip neutral">${escapeHtml(diagnosticBadgeLabel(item))}</span>
-                    </div>
-                    <div class="diagnostic-fix">
-                      <span>\u0427\u0442\u043e \u043f\u043b\u043e\u0445\u043e</span>
-                      <p>${escapeHtml(item.description || UI.noData)}</p>
-                    </div>
-                    <div class="diagnostic-fix">
-                      <span>\u0427\u0442\u043e \u0441\u0434\u0435\u043b\u0430\u0442\u044c</span>
-                      <p>${escapeHtml(item.fix || UI.noData)}</p>
-                    </div>
-                    ${item.targets?.length ? `
-                      <div class="diagnostic-targets">
-                        <span>\u041a\u043e\u043d\u043a\u0440\u0435\u0442\u043d\u044b\u0435 \u0440\u0435\u0441\u0443\u0440\u0441\u044b</span>
-                        <ul>
-                          ${item.targets.map((target) => `<li>${escapeHtml(target)}</li>`).join("")}
-                        </ul>
-                      </div>
-                    ` : ""}
-                  </article>
-                `).join("")}
-              </div>
-            </section>
-          `).join("")}
-        </div>
-      `;
-    }
-
-    function renderResourceOffenders(offenders) {
-      if (!offenders?.length) {
-        return `<p>${UI.noData}</p>`;
-      }
-
-      return `
-        <div class="table-wrap">
-          <table class="data-table offenders-table">
-            <thead>
-              <tr>
-                <th>\u0422\u0438\u043f</th>
-                <th>\u0424\u0430\u0439\u043b</th>
-                <th>\u041f\u043b\u0430\u0433\u0438\u043d</th>
-                <th>\u041f\u043e\u0442\u0435\u0440\u0438</th>
-                <th>\u0420\u0430\u0437\u043c\u0435\u0440</th>
-                <th>\u0413\u0434\u0435 \u0432\u0441\u043f\u043b\u044b\u043b</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${offenders.map((item) => `
-                <tr>
-                  <td>${escapeHtml(item.type)}</td>
-                  <td class="table-url">${escapeHtml(item.url)}</td>
-                  <td>${escapeHtml(item.plugin || "-")}</td>
-                  <td>${escapeHtml([item.wastedMs ? `${item.wastedMs} ms` : "", item.wastedBytes ? bytesLabel(item.wastedBytes) : ""].filter(Boolean).join(" / ") || "-")}</td>
-                  <td>${escapeHtml(bytesLabel(item.totalBytes))}</td>
-                  <td>${escapeHtml(offenderAuditLabel(item))}</td>
-                </tr>
-              `).join("")}
-            </tbody>
-          </table>
-        </div>
-      `;
-    }
-
     function assetSourceLabel(item = {}) {
       switch (item.sourceType) {
         case "plugin":
-          return `Plugin: ${item.sourceName}`;
+          return `Плагин: ${item.sourceName}`;
         case "theme":
-          return `Theme: ${item.sourceName}`;
+          return `Тема: ${item.sourceName}`;
         case "elementor":
-          return "Elementor generated";
+          return "Elementor";
         case "wordpress-core":
-          return "WordPress core";
+          return "WordPress";
         case "uploads":
-          return "Uploads";
+          return "Медиа";
         case "third-party":
-          return `Third-party: ${item.sourceName}`;
+          return `Сторонний: ${item.sourceName}`;
         default:
           return item.sourceName || item.sourceType || "-";
       }
@@ -879,10 +791,10 @@
     function renderAssetBadges(asset) {
       const badges = [
         asset.renderBlockingReports
-          ? `<span class="asset-badge bad">render-blocking ${asset.renderBlockingReports}/${asset.totalReports}</span>`
+          ? `<span class="asset-badge bad">блокирует ${asset.renderBlockingReports}/${asset.totalReports}</span>`
           : "",
         asset.unusedBytes
-          ? `<span class="asset-badge warn">unused ${escapeHtml(bytesLabel(asset.unusedBytes))}</span>`
+          ? `<span class="asset-badge warn">лишнее ${escapeHtml(bytesLabel(asset.unusedBytes))}</span>`
           : "",
         asset.priority
           ? `<span class="asset-badge neutral">${escapeHtml(asset.priority)}</span>`
@@ -892,266 +804,511 @@
       return badges.length ? `<div class="asset-payload-badges">${badges.join("")}</div>` : "";
     }
 
-    function renderAssetList(title, assets) {
-      if (!assets?.length) {
-        return `
-          <article class="asset-payload-card">
-            <h4>${escapeHtml(title)}</h4>
-            <p>${UI.noData}</p>
-          </article>
-        `;
-      }
-
-      return `
-        <article class="asset-payload-card">
-          <h4>${escapeHtml(title)}</h4>
-          <ol class="asset-payload-list">
-            ${assets.slice(0, 12).map((asset) => `
-              <li class="asset-payload-item">
-                <div class="asset-payload-main">
-                  <strong title="${escapeHtml(asset.url)}">${escapeHtml(asset.fileName || asset.url)}</strong>
-                  <span>${escapeHtml(assetSourceLabel(asset))}</span>
-                  <small>${escapeHtml(asset.url)}</small>
-                  ${renderAssetBadges(asset)}
-                </div>
-                <div class="asset-payload-size">
-                  <strong>${escapeHtml(bytesLabel(asset.transferBytes))}</strong>
-                  <span>raw ${escapeHtml(bytesLabel(asset.resourceBytes))}</span>
-                  <span>${asset.reportsSeen}/${asset.totalReports}</span>
-                </div>
-              </li>
-            `).join("")}
-          </ol>
-        </article>
-      `;
-    }
-
-    function renderAssetPayloadReport(payloadReport) {
-      const summary = payloadReport?.summary || {};
-      const groups = payloadReport?.groups || [];
-
-      if (!summary.assetCount) {
-        return `
-          <section class="info-section payload-report">
-            <div class="info-section-head">
-              <h3>CSS/JS payload</h3>
-              <span>network-requests</span>
-            </div>
-            <p>${UI.noData}</p>
-          </section>
-        `;
-      }
-
-      return `
-        <section class="info-section payload-report">
-          <div class="info-section-head">
-            <h3>CSS/JS payload</h3>
-            <span>\u043f\u043e\u043b\u043d\u044b\u0439 \u0441\u0440\u0435\u0437 \u0441\u0442\u0438\u043b\u0435\u0439 \u0438 \u0441\u043a\u0440\u0438\u043f\u0442\u043e\u0432</span>
-          </div>
-          <div class="compact-summary-strip payload-summary-strip">
-            <div><span>CSS transfer</span><strong>${escapeHtml(summary.css?.count || 0)} / ${escapeHtml(bytesLabel(summary.css?.transferBytes))}</strong></div>
-            <div><span>JS transfer</span><strong>${escapeHtml(summary.js?.count || 0)} / ${escapeHtml(bytesLabel(summary.js?.transferBytes))}</strong></div>
-            <div><span>Render-blocking</span><strong>${escapeHtml(summary.renderBlockingCount || 0)}</strong></div>
-            <div><span>Unused known</span><strong>${escapeHtml(bytesLabel(summary.totalUnusedBytes))}</strong></div>
-            <div><span>Third-party</span><strong>${escapeHtml(bytesLabel((summary.css?.thirdPartyBytes || 0) + (summary.js?.thirdPartyBytes || 0)))}</strong></div>
-            <div><span>\u0424\u0430\u0439\u043b\u043e\u0432</span><strong>${escapeHtml(summary.assetCount)} / ${escapeHtml(summary.reportCount)} reports</strong></div>
-          </div>
-          <div class="table-wrap asset-group-wrap">
-            <table class="data-table asset-group-table">
-              <thead>
-                <tr>
-                  <th>\u0418\u0441\u0442\u043e\u0447\u043d\u0438\u043a</th>
-                  <th>CSS</th>
-                  <th>JS</th>
-                  <th>Transfer</th>
-                  <th>Raw</th>
-                  <th>Unused</th>
-                  <th>Blocking</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${groups.slice(0, 16).map((group) => `
-                  <tr>
-                    <td class="table-url">${escapeHtml(assetSourceLabel(group))}</td>
-                    <td>${escapeHtml(group.cssCount)} / ${escapeHtml(bytesLabel(group.cssTransferBytes))}</td>
-                    <td>${escapeHtml(group.jsCount)} / ${escapeHtml(bytesLabel(group.jsTransferBytes))}</td>
-                    <td>${escapeHtml(bytesLabel(group.totalTransferBytes))}</td>
-                    <td>${escapeHtml(bytesLabel(group.totalResourceBytes))}</td>
-                    <td>${escapeHtml(bytesLabel(group.unusedBytes))}</td>
-                    <td>${escapeHtml(group.renderBlockingCount)}</td>
-                  </tr>
-                `).join("")}
-              </tbody>
-            </table>
-          </div>
-          <div class="asset-payload-grid">
-            ${renderAssetList("\u0421\u0430\u043c\u044b\u0435 \u0442\u044f\u0436\u0435\u043b\u044b\u0435 CSS", payloadReport.css)}
-            ${renderAssetList("\u0421\u0430\u043c\u044b\u0435 \u0442\u044f\u0436\u0435\u043b\u044b\u0435 JS", payloadReport.js)}
-          </div>
-        </section>
-      `;
-    }
-
-    function renderStability(metricStats, runs) {
-      const scoreSpread = metricStats.score?.spread;
-      const lcpSpread = metricStats.lcp?.spread;
-      const clsSpread = metricStats.cls?.spread;
-      const scoreNoisy = scoreSpread != null && scoreSpread >= 5;
-      const lcpNoisy = lcpSpread != null && lcpSpread >= 500;
-      const clsNoisy = clsSpread != null && clsSpread >= 0.05;
-      const verdict = runs.length < 3
-        ? "\u041c\u0430\u043b\u043e \u0434\u0430\u043d\u043d\u044b\u0445"
-        : (scoreNoisy || lcpNoisy || clsNoisy ? "\u0421\u0435\u0440\u0438\u044f \u0448\u0443\u043c\u043d\u0430\u044f" : "\u0421\u0435\u0440\u0438\u044f \u0441\u0442\u0430\u0431\u0438\u043b\u044c\u043d\u0430\u044f");
-
-      return `
-        <section class="info-section">
-          <div class="info-section-head">
-            <h3>\u0421\u0442\u0430\u0431\u0438\u043b\u044c\u043d\u043e\u0441\u0442\u044c \u0441\u0435\u0440\u0438\u0438</h3>
-            <span>\u0440\u0430\u0437\u0431\u0440\u043e\u0441</span>
-          </div>
-          <div class="compact-summary-strip stability-strip">
-            <div><span>\u0412\u044b\u0432\u043e\u0434</span><strong>${escapeHtml(verdict)}</strong></div>
-            <div><span>\u0420\u0430\u0437\u0431\u0440\u043e\u0441 \u043e\u0446\u0435\u043d\u043a\u0438</span><strong>${escapeHtml(formatMetric("score", scoreSpread))}</strong></div>
-            <div><span>\u0420\u0430\u0437\u0431\u0440\u043e\u0441 LCP</span><strong>${escapeHtml(formatMetric("lcp", lcpSpread))}</strong></div>
-            <div><span>\u0420\u0430\u0437\u0431\u0440\u043e\u0441 CLS</span><strong>${escapeHtml(formatMetric("cls", clsSpread))}</strong></div>
-          </div>
-        </section>
-      `;
-    }
-
-    function renderTechContext(context = {}, test) {
-      const items = [
-        [UI.source, test.runnerLabel || runnerLabel(test.runner)],
-        [UI.deviceShort, formatDevice(test.device)],
-        ["\u0424\u043e\u0440\u043c-\u0444\u0430\u043a\u0442\u043e\u0440", context.formFactor || test.device],
-        ["Lighthouse", context.lighthouseVersion || "-"],
-        ["\u0412\u0440\u0435\u043c\u044f \u0441\u043d\u0438\u043c\u043a\u0430", context.fetchTime ? formatDate(context.fetchTime) : "-"],
-        ["\u042d\u043c\u0443\u043b\u044f\u0446\u0438\u044f", context.throttlingMethod || "-"],
-        ["\u0424\u0438\u043d\u0430\u043b\u044c\u043d\u044b\u0439 URL", context.finalUrl || test.url]
+    function allPayloadAssets(payloadReport = {}) {
+      return [
+        ...(payloadReport.js || []),
+        ...(payloadReport.css || []),
+        ...(payloadReport.media || []),
+        ...(payloadReport.fonts || []),
+        ...(payloadReport.other || [])
       ];
-
-      return `
-        <section class="info-section">
-          <div class="info-section-head">
-            <h3>\u041a\u043e\u043d\u0442\u0435\u043a\u0441\u0442 \u0437\u0430\u043f\u0443\u0441\u043a\u0430</h3>
-            <span>\u0441\u0440\u0435\u0434\u0430</span>
-          </div>
-          <div class="compact-summary-strip tech-strip">
-            ${items.map(([label, value]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join("")}
-          </div>
-        </section>
-      `;
     }
 
-    function renderRawReports(rawReports) {
-      if (!rawReports.length) {
-        return `<p>${UI.reportsEmpty}</p>`;
-      }
-      return `
-        <ul class="raw-report-list">
-          ${rawReports.map((report) => `
-            <li>
-              <a href="${escapeHtml(report.jsonPath)}" target="_blank" rel="noreferrer">
-                ${UI.runsShort} ${report.runIndex}: ${escapeHtml(report.jsonPath)}
-              </a>
-            </li>
-          `).join("")}
-        </ul>
-      `;
-    }
+    function renderAssetInventoryFilters(payloadReport = {}) {
+      const recommendationOptions = new Map();
+      recommendationOptions.set("all", "Все рекомендации");
+      allPayloadAssets(payloadReport).forEach((asset) => {
+        const recommendation = asset.recommendation || {};
+        if (recommendation.id && recommendation.label) {
+          recommendationOptions.set(recommendation.id, recommendation.label);
+        }
+      });
 
-    function renderLog(logLines) {
-      if (!logLines.length) {
-        return `<p>${UI.logEmpty}</p>`;
-      }
-      return `<pre class="log-console">${escapeHtml(logLines.join("\n"))}</pre>`;
-    }
-
-    function renderInsightBanner(insight) {
       return `
-        <div class="insight-banner ${escapeHtml(insight.tone)}">
-          <strong>${escapeHtml(insight.title)}</strong>
-          <p>${escapeHtml(insight.text)}</p>
+        <div
+          class="asset-filter-bar"
+          data-asset-inventory-filter
+          data-asset-sort-value="transfer"
+          data-asset-min-weight-value="0"
+          data-asset-recommendation-value="all"
+        >
+          ${renderCustomSelect({
+            label: "Сортировка",
+            value: "transfer",
+            action: "asset-sort",
+            options: [
+              { value: "transfer", label: "Тяжелые сверху" },
+              { value: "blocking", label: "Сначала блокирующие" },
+              { value: "unused", label: "Сначала лишний код" },
+              { value: "early", label: "Ранние запросы" },
+              { value: "late-heavy", label: "Поздние тяжелые" },
+              { value: "source", label: "По источнику" }
+            ]
+          })}
+          ${renderCustomSelect({
+            label: "Мин. вес",
+            value: "0",
+            action: "asset-min-weight",
+            options: [
+              { value: "0", label: "Любой вес" },
+              { value: "10", label: "от 10 KiB" },
+              { value: "25", label: "от 25 KiB" },
+              { value: "50", label: "от 50 KiB" },
+              { value: "100", label: "от 100 KiB" },
+              { value: "250", label: "от 250 KiB" }
+            ]
+          })}
+          ${renderCustomSelect({
+            label: "Рекомендация",
+            value: "all",
+            action: "asset-recommendation",
+            options: [...recommendationOptions.entries()].map(([value, label]) => ({ value, label }))
+          })}
+          <strong data-asset-filter-count></strong>
         </div>
       `;
     }
 
-    function renderOptimizationReport(optimizationReport) {
-      const workItems = optimizationReport?.workItems || [];
+    function sumAssetBytes(assets = [], key) {
+      return assets.reduce((sum, asset) => sum + Number(asset?.[key] || 0), 0);
+    }
 
-      if (!workItems.length) {
+    function renderResourceShortlist(payloadReport = {}) {
+      const assets = allPayloadAssets(payloadReport);
+      const blocking = assets.filter((asset) => asset.renderBlockingReports > 0);
+      const unused = assets.filter((asset) => asset.unusedBytes > 0);
+      const heavyJsCss = assets.filter((asset) =>
+        (asset.type === "js" || asset.type === "css") &&
+        Number(asset.transferBytes || 0) >= 50 * 1024
+      );
+      const media = payloadReport.media || [];
+      const fonts = payloadReport.fonts || [];
+      const cards = [
+        {
+          title: "Блокируют первый рендер",
+          meta: `${blocking.length} файлов / ${bytesLabel(sumAssetBytes(blocking, "transferBytes"))}`,
+          sort: "blocking",
+          min: "0",
+          recommendation: "all"
+        },
+        {
+          title: "Лишний код",
+          meta: `${unused.length} файлов / ${bytesLabel(sumAssetBytes(unused, "unusedBytes"))} лишнего`,
+          sort: "unused",
+          min: "0",
+          recommendation: "all"
+        },
+        {
+          title: "Тяжелые JS/CSS",
+          meta: `${heavyJsCss.length} файлов / ${bytesLabel(sumAssetBytes(heavyJsCss, "transferBytes"))}`,
+          sort: "transfer",
+          min: "50",
+          recommendation: "all"
+        },
+        {
+          title: "Медиа",
+          meta: `${media.length} файлов / ${bytesLabel(sumAssetBytes(media, "transferBytes"))}`,
+          sort: "transfer",
+          min: "25",
+          recommendation: "all"
+        },
+        {
+          title: "Шрифты и иконки",
+          meta: `${fonts.length} файлов / ${bytesLabel(sumAssetBytes(fonts, "transferBytes"))}`,
+          sort: "transfer",
+          min: "0",
+          recommendation: "optimize-font"
+        }
+      ].filter((card) => !card.meta.startsWith("0 файлов"));
+
+      if (!cards.length) {
+        return "";
+      }
+
+      return `
+        <div class="resource-shortlist">
+          <div class="resource-shortlist-head">
+            <h4>Фокус инвентаря</h4>
+            <span>быстрые фильтры полного списка</span>
+          </div>
+          <div class="resource-shortlist-grid">
+            ${cards.map((card) => `
+              <button
+                type="button"
+                class="resource-shortcut"
+                data-asset-shortcut
+                data-shortcut-sort="${escapeHtml(card.sort)}"
+                data-shortcut-min="${escapeHtml(card.min)}"
+                data-shortcut-recommendation="${escapeHtml(card.recommendation)}"
+                aria-label="${escapeHtml(`Показать: ${card.title}, ${card.meta}`)}"
+              >
+                <strong>${escapeHtml(card.title)}</strong>
+                <span>${escapeHtml(card.meta)}</span>
+              </button>
+            `).join("")}
+          </div>
+        </div>
+      `;
+    }
+
+    function riskClassName(risk = {}) {
+      return ["safe", "verify", "fragile"].includes(risk.level) ? risk.level : "verify";
+    }
+
+    function renderRiskBadge(risk = {}) {
+      const level = riskClassName(risk);
+      const label = risk.label || "Проверить вручную";
+      return `<b class="asset-risk-badge risk-${escapeHtml(level)}">${escapeHtml(label)}</b>`;
+    }
+
+    function renderAssetActionPlan(payloadReport = {}) {
+      const actions = (payloadReport.actions || []).slice(0, 4);
+
+      if (!actions.length) {
+        return "";
+      }
+
+      const severityLabel = {
+        high: "Высокий",
+        medium: "Средний",
+        low: "Низкий"
+      };
+      const actionCopy = {
+        "elementor-payload": {
+          title: "Elementor CSS/JS на критическом пути",
+          fix: "Проверить эти Elementor-файлы первыми: что реально нужно первому экрану оставить, остальное дробить или грузить позже."
+        },
+        "render-blocking-css": {
+          title: "CSS блокирует первый рендер",
+          fix: "Для файлов ниже: критичный минимум встроить в HTML, остальное отложить. CSS меню/попапа не трогать без проверки."
+        },
+        "render-blocking-js": {
+          title: "JS блокирует старт страницы",
+          fix: "Отложить только те скрипты ниже, которые не нужны для первого экрана, меню, попапа и форм."
+        },
+        "unused-css-js": {
+          title: "Lighthouse видит лишний CSS/JS",
+          fix: "Начать с файлов ниже: отключить лишний виджет/модуль, потом дробить или грузить после взаимодействия."
+        },
+        "royal-addons-payload": {
+          title: "Royal Addons добавляет лишний вес",
+          fix: "Сверить файлы ниже с реальными виджетами страницы. Не отключать WPR popup/menu, если на них держится мобильное меню."
+        },
+        "icon-fonts": {
+          title: "Иконки/шрифты дорогие для мобильной версии",
+          fix: "Проверить файлы ниже: заменить иконки на SVG/sprite или грузить шрифт позже после проверки UI."
+        },
+        "heavy-plugin-js": {
+          title: "Тяжелый JS плагина",
+          fix: "Найти виджет, который требует эти файлы. Если его нет на первом экране, отложить или выгрузить по странице."
+        },
+        "third-party-js": {
+          title: "Сторонний JS в загрузке",
+          fix: "Файлы ниже грузить после согласия, простоя браузера или взаимодействия, если они не обязательны на старте."
+        }
+      };
+
+      function renderActionResource(resource = {}) {
+        const flags = [
+          resource.renderBlockingReports ? `${resource.renderBlockingReports}/${resource.totalReports} блокирует` : "",
+          resource.unusedBytes ? `${bytesLabel(resource.unusedBytes)} лишнее` : "",
+          resource.transferBytes ? `${bytesLabel(resource.transferBytes)} передача` : "",
+          resource.resourceBytes ? `${bytesLabel(resource.resourceBytes)} исходный` : ""
+        ].filter(Boolean);
+        const source = assetSourceLabel(resource);
+        const fileName = resource.fileName || resource.url || "resource";
+
         return `
-          <section class="info-section">
-            <div class="info-section-head">
-              <h3>План оптимизации</h3>
-              <span>нет явных групп работ</span>
+          <li class="asset-action-resource">
+            <a href="${escapeHtml(resource.url || "#")}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(resource.url || "")}">
+              ${escapeHtml(fileName)}
+            </a>
+            <span>${escapeHtml(source)}</span>
+            <small>
+              ${flags.map((flag) => `<b>${escapeHtml(flag)}</b>`).join("")}
+            </small>
+          </li>
+        `;
+      }
+
+      return `
+        <div class="asset-action-plan">
+          <div class="asset-action-plan-head">
+            <h4>Приоритетные задачи оптимизации</h4>
+            <span>конкретные ресурсы и безопасные действия</span>
+          </div>
+          <div class="asset-action-list">
+            ${actions.map((action, index) => {
+              const copy = actionCopy[action.id] || {};
+              const resources = (action.resources || []).slice(0, 3);
+              const hiddenCount = Math.max(0, (action.resources || []).length - resources.length);
+              const severity = action.severity || "medium";
+
+              return `
+                <article class="asset-action-row severity-${escapeHtml(severity)}">
+                  <div class="asset-action-main">
+                    <div class="asset-action-title">
+                      <span>${escapeHtml(`#${index + 1}`)}</span>
+                      <strong>${escapeHtml(copy.title || action.title)}</strong>
+                      <div class="asset-action-title-badges">
+                        <em>${escapeHtml(severityLabel[severity] || severity)}</em>
+                        ${action.risk ? renderRiskBadge(action.risk) : ""}
+                      </div>
+                    </div>
+                    <p>${escapeHtml(copy.fix || action.fix)}</p>
+                  </div>
+                  <div class="asset-action-impact">
+                    <span>${escapeHtml(action.impact?.affectedCount || 0)} файлов</span>
+                    <span>${escapeHtml(bytesLabel(action.impact?.transferBytes || 0))}</span>
+                    ${action.impact?.renderBlockingMs ? `<span>${escapeHtml(Math.round(action.impact.renderBlockingMs))} ms блокировка</span>` : ""}
+                    ${action.impact?.unusedBytes ? `<span>${escapeHtml(bytesLabel(action.impact.unusedBytes))} лишнее</span>` : ""}
+                  </div>
+                  <div class="asset-action-resource-box">
+                    ${resources.length ? `
+                      <ol class="asset-action-resources">
+                        ${resources.map(renderActionResource).join("")}
+                      </ol>
+                      ${hiddenCount ? `<div class="asset-action-more">+${escapeHtml(hiddenCount)} файлов в полном списке</div>` : ""}
+                    ` : `<div class="asset-action-more">Нет конкретных файлов в данных Lighthouse</div>`}
+                  </div>
+                </article>
+              `;
+            }).join("")}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderAssetInventoryMeta(asset = {}) {
+      const meta = [
+        ["Передача", bytesLabel(asset.transferBytes)],
+        ["Исходный", bytesLabel(asset.resourceBytes)],
+        ["Лишнее", asset.unusedBytes ? `${bytesLabel(asset.unusedBytes)} / ${asset.unusedPercent || 0}%` : "-"],
+        ["Блокировка", asset.renderBlockingReports ? `${asset.renderBlockingReports}/${asset.totalReports}, ${Math.round(asset.renderBlockingMs || 0)} ms` : "-"],
+        ["Приоритет", asset.priority || "-"],
+        ["Встречается", `${asset.reportsSeen}/${asset.totalReports}`],
+        ["Старт", asset.firstRequestTimeMs == null ? "-" : `${asset.firstRequestTimeMs} ms`],
+        ["Конец", asset.lastEndTimeMs == null ? "-" : `${asset.lastEndTimeMs} ms`]
+      ];
+
+      return `
+        <dl class="asset-inventory-meta">
+          ${meta.map(([label, value]) => `
+            <div>
+              <dt>${escapeHtml(label)}</dt>
+              <dd>${escapeHtml(value)}</dd>
             </div>
-            <p>${UI.diagnosticsEmpty}</p>
+          `).join("")}
+        </dl>
+      `;
+    }
+
+    function renderAssetInventoryItem(asset = {}) {
+      const recommendation = asset.recommendation || {
+        id: "review",
+        label: "Проверить вручную",
+        detail: "Нет рекомендации.",
+        risk: {
+          level: "verify",
+          label: "Проверить вручную",
+          detail: "Сверить назначение ресурса вручную."
+        }
+      };
+      const risk = recommendation.risk || {
+        level: "verify",
+        label: "Проверить вручную",
+        detail: "Сверить назначение ресурса вручную."
+      };
+      const transferKib = Math.round((asset.transferBytes || 0) / 1024);
+
+      return `
+        <li
+          class="asset-inventory-item"
+          data-asset-item
+          data-asset-kib="${escapeHtml(transferKib)}"
+          data-asset-recommendation="${escapeHtml(recommendation.id)}"
+          data-asset-transfer="${escapeHtml(asset.transferBytes || 0)}"
+          data-asset-raw="${escapeHtml(asset.resourceBytes || 0)}"
+          data-asset-unused="${escapeHtml(asset.unusedBytes || 0)}"
+          data-asset-blocking="${escapeHtml(asset.renderBlockingMs || 0)}"
+          data-asset-blocking-reports="${escapeHtml(asset.renderBlockingReports || 0)}"
+          data-asset-start="${escapeHtml(asset.firstRequestTimeMs == null ? 999999999 : asset.firstRequestTimeMs)}"
+          data-asset-end="${escapeHtml(asset.lastEndTimeMs == null ? 0 : asset.lastEndTimeMs)}"
+          data-asset-source="${escapeHtml(assetSourceLabel(asset))}"
+          data-asset-file="${escapeHtml(asset.fileName || asset.url)}"
+        >
+          <div class="asset-inventory-main">
+            <div>
+              <strong title="${escapeHtml(asset.url)}">${escapeHtml(asset.fileName || asset.url)}</strong>
+              <span>${escapeHtml(assetSourceLabel(asset))}</span>
+            </div>
+            <small>${escapeHtml(asset.url)}</small>
+            ${renderAssetBadges(asset)}
+          </div>
+          ${renderAssetInventoryMeta(asset)}
+          <div class="asset-inventory-recommendation risk-${escapeHtml(riskClassName(risk))}">
+            <div class="asset-recommendation-head">
+              <span>${escapeHtml(recommendation.label)}</span>
+              ${renderRiskBadge(risk)}
+            </div>
+            <p>${escapeHtml(recommendation.detail)}</p>
+            <small>${escapeHtml(risk.detail || "")}</small>
+          </div>
+        </li>
+      `;
+    }
+
+    function renderAssetInventorySection(title, summaryBucket = {}, assets = []) {
+      return `
+        <article class="asset-inventory-section" data-asset-section>
+          <div class="asset-inventory-head">
+            <div>
+              <h4>${escapeHtml(title)}</h4>
+              <span>${escapeHtml(summaryBucket.count || 0)} файлов / ${escapeHtml(bytesLabel(summaryBucket.transferBytes))} передача / ${escapeHtml(bytesLabel(summaryBucket.resourceBytes))} исходный</span>
+            </div>
+            <strong data-asset-section-count>${escapeHtml(assets.length)} показано</strong>
+          </div>
+          ${assets.length ? `
+            <ol class="asset-inventory-list">
+              ${assets.map(renderAssetInventoryItem).join("")}
+            </ol>
+          ` : `<p>${UI.noData}</p>`}
+        </article>
+      `;
+    }
+
+    function renderPayloadExportLinks(test) {
+      if (!test?.id || !isTerminalStatus(test.status)) {
+        return "";
+      }
+
+      return `
+        <div class="payload-export-actions">
+          <a class="payload-export-link" href="/api/tests/${escapeHtml(test.id)}/assets.csv" target="_blank" rel="noreferrer">CSV ресурсов</a>
+          <a class="payload-export-link" href="/api/tests/${escapeHtml(test.id)}/assets.json" target="_blank" rel="noreferrer">JSON ресурсов</a>
+        </div>
+      `;
+    }
+
+    function renderAssetPayloadReport(payloadReport, test = null) {
+      const summary = payloadReport?.summary || {};
+
+      if (!summary.assetCount) {
+        return `
+          <section class="panel payload-report">
+            <div class="info-section-head">
+              <div>
+                <h3>Ресурсы и приоритеты</h3>
+                <span>нет данных сетевого инвентаря</span>
+              </div>
+            </div>
+            <p>${UI.noData}</p>
           </section>
         `;
       }
 
       return `
-        <section class="info-section optimization-plan">
+        <section class="panel payload-report">
           <div class="info-section-head">
-            <h3>План оптимизации</h3>
-            <span>сначала максимальный ожидаемый эффект</span>
+            <div>
+              <h3>Ресурсы и приоритеты</h3>
+              <span>задачи, быстрые срезы и полный список сетевых ресурсов</span>
+            </div>
+            ${renderPayloadExportLinks(test)}
           </div>
-          <div class="diagnostic-list">
-            ${workItems.slice(0, 8).map((item, index) => `
-              <article class="diagnostic-card">
-                <div class="diagnostic-card-top">
-                  <span>${index + 1}. ${escapeHtml(item.categoryLabel || item.category)}</span>
-                  <strong>${escapeHtml(item.title)}</strong>
-                  <small>Priority ${escapeHtml(item.priority)} / ${escapeHtml(item.confidence)} confidence / ${escapeHtml(item.risk)} risk</small>
-                </div>
-                <p>${escapeHtml(item.problem)}</p>
-                <div class="compact-summary-strip">
-                  <div><span>LCP</span><strong>${escapeHtml(item.impact?.lcpMs || 0)} ms</strong></div>
-                  <div><span>TBT</span><strong>${escapeHtml(item.impact?.tbtMs || 0)} ms</strong></div>
-                  <div><span>Блокировка</span><strong>${escapeHtml(item.impact?.renderBlockingMs || 0)} ms</strong></div>
-                  <div><span>Лишний вес</span><strong>${escapeHtml(item.impact?.wastedKb || 0)} KiB</strong></div>
-                </div>
-                <div class="diagnostic-fix">
-                  <span>Что сделать</span>
-                  <p>${escapeHtml(item.solution)}</p>
-                </div>
-                ${item.resources?.length ? `
-                  <div class="diagnostic-targets">
-                    <span>Ресурсы для этой группы</span>
-                    <ul>
-                      ${item.resources.slice(0, 6).map((resource) => `
-                        <li>
-                          ${escapeHtml(resource.url)}
-                          ${resource.wastedMs || resource.wastedKb || resource.transferKb
-                            ? ` (${[
-                              resource.wastedMs ? `${resource.wastedMs} ms` : "",
-                              resource.wastedKb ? `${resource.wastedKb} KiB wasted` : "",
-                              resource.transferKb ? `${resource.transferKb} KiB transfer` : ""
-                            ].filter(Boolean).join(", ")})`
-                            : ""}
-                        </li>
-                      `).join("")}
-                    </ul>
-                  </div>
-                ` : ""}
-              </article>
-            `).join("")}
+          <div class="compact-summary-strip payload-summary-strip">
+            <div><span>JS</span><strong>${escapeHtml(summary.js?.count || 0)} / ${escapeHtml(bytesLabel(summary.js?.transferBytes))}</strong></div>
+            <div><span>CSS</span><strong>${escapeHtml(summary.css?.count || 0)} / ${escapeHtml(bytesLabel(summary.css?.transferBytes))}</strong></div>
+            <div><span>Медиа</span><strong>${escapeHtml(summary.media?.count || 0)} / ${escapeHtml(bytesLabel(summary.media?.transferBytes))}</strong></div>
+            <div><span>Шрифты</span><strong>${escapeHtml(summary.font?.count || 0)} / ${escapeHtml(bytesLabel(summary.font?.transferBytes))}</strong></div>
+            <div><span>Прочее</span><strong>${escapeHtml(summary.other?.count || 0)} / ${escapeHtml(bytesLabel(summary.other?.transferBytes))}</strong></div>
+            <div><span>Блокируют</span><strong>${escapeHtml(summary.renderBlockingCount || 0)}</strong></div>
+            <div><span>Лишнее</span><strong>${escapeHtml(bytesLabel(summary.totalUnusedBytes))}</strong></div>
+            <div><span>Сторонние</span><strong>${escapeHtml(bytesLabel(summary.totalThirdPartyBytes || 0))}</strong></div>
+            <div><span>Всего</span><strong>${escapeHtml(summary.assetCount)} / ${escapeHtml(bytesLabel(summary.totalTransferBytes))}</strong></div>
+          </div>
+          ${renderAssetActionPlan(payloadReport)}
+          ${renderResourceShortlist(payloadReport)}
+          ${renderAssetInventoryFilters(payloadReport)}
+          <div class="asset-inventory" data-asset-inventory>
+            ${renderAssetInventorySection("JS-скрипты", summary.js, payloadReport.js || [])}
+            ${renderAssetInventorySection("CSS-стили", summary.css, payloadReport.css || [])}
+            ${renderAssetInventorySection("Медиа", summary.media, payloadReport.media || [])}
+            ${renderAssetInventorySection("Шрифты", summary.font, payloadReport.fonts || [])}
+            ${renderAssetInventorySection("Прочее", summary.other, payloadReport.other || [])}
           </div>
         </section>
       `;
     }
 
-    function renderOverview(test, comparison, runs, runModeText) {
-      const uniqueRuns = uniqueRunCount(runs);
-      const runCount = getRequestedRunCount(test);
+    function renderRunContextPanel(test, comparison, metricStats, runs, context = {}, uniqueRuns, runCount, runQuality = null) {
+      const stability = stabilityState(metricStats, runs);
+      const duplicateCount = runQuality?.duplicateCount ?? Math.max(0, runCount - uniqueRuns);
+      const runner = test.runnerLabel || runnerLabel(test.runner);
+      const runLabel = test.runner === "psi"
+        ? `${test.runsRequested} PSI`
+        : `${test.runsRequested} Lighthouse${test.warmup ? " + warmup" : ""}`;
+      const finalUrl = context.finalUrl && context.finalUrl !== test.url
+        ? context.finalUrl
+        : "";
+      const warningInsight = buildInsight(test, runs, comparison);
+      const shouldShowInsight = warningInsight && warningInsight.tone === "warning";
+      const seriesItems = [
+        ["Режим", `${runner} / ${formatDevice(test.device)} / ${runLabel}`],
+        ["Разброс", stability.spread],
+        runQuality?.label ? ["Вердикт", runQuality.label] : null,
+        duplicateCount ? ["Дубликаты", `${duplicateCount} из ${runCount}`] : null,
+        isUsefulNote(test.note, test) ? ["Заметка", test.note] : null
+      ].filter(Boolean);
+      const snapshotItems = [
+        context.lighthouseVersion ? ["Lighthouse", context.lighthouseVersion] : null,
+        context.throttlingMethod ? ["Эмуляция", context.throttlingMethod] : null,
+        finalUrl ? ["Финальный URL", finalUrl] : null
+      ].filter(Boolean);
+
+      return `
+        <section class="run-context-panel">
+          <div class="run-context-head">
+            <div>
+              <h3>Надежность серии</h3>
+              <p>Уникальность снимков, повторы и пригодность медианы для выводов.</p>
+            </div>
+          </div>
+          ${renderRunQualitySummary(test, runQuality, uniqueRuns, runCount)}
+          <div class="run-context-grid">
+            <article class="run-context-card">
+              <div class="run-context-card-head">
+                <span>Серия</span>
+                <strong>${escapeHtml(stability.verdict)}</strong>
+              </div>
+              ${renderContextItems(seriesItems)}
+            </article>
+            <article class="run-context-card">
+              <div class="run-context-card-head">
+                <span>Снимок</span>
+                <strong>${escapeHtml(context.fetchTime ? formatDate(context.fetchTime) : formatDate(test.completedAt))}</strong>
+              </div>
+              ${renderContextItems(snapshotItems)}
+            </article>
+          </div>
+          ${shouldShowInsight ? `
+            <div class="run-context-note ${escapeHtml(warningInsight.tone)}">
+              <strong>${escapeHtml(warningInsight.title)}</strong>
+              <span>${escapeHtml(warningInsight.text)}</span>
+            </div>
+          ` : ""}
+        </section>
+      `;
+    }
+
+    function renderOverview(test, comparison, runs, baselineTests = [], comparisonQuality = null) {
       return `
         <section class="result-overview">
           <div class="overview-grid compact">
-            ${renderScoreCard(test, comparison, runModeText, uniqueRuns, runCount)}
+            ${renderScoreCard(test, comparison)}
             <div class="overview-half-grid">
               ${renderMedianCard(test)}
-              ${renderAverageComparisonCard(comparison, runs)}
+              ${renderAverageComparisonCard(comparison, runs, test, baselineTests, comparisonQuality)}
             </div>
           </div>
           ${renderStageCard(runs)}
@@ -1164,22 +1321,25 @@
       const progressVisual = getProgressVisualState(test, progress, runs);
       const progressParts = splitProgressVisualState(test, progressVisual);
       const active = isExecutionActive(test.status);
+      const tuning = String(test.status || "").toLowerCase() === "tuning";
       const animationClockMs = Date.now();
-      const stepsLabel = progressParts.includesWarmup ? "Основные прогоны" : UI.stepsDone;
+      const stepsLabel = tuning
+        ? "Наладка PSI"
+        : (progressParts.includesWarmup ? "Основные прогоны" : UI.stepsDone);
+      const mainPercentage = Math.round((progressParts.mainCompleted / progressParts.mainTotal) * 100);
+      const progressCounterText = tuning
+        ? "скрытый прогон"
+        : `${progressParts.mainCompleted} / ${progressParts.mainTotal} (${mainPercentage}%)`;
       const svgWidth = 1000;
       const svgHeight = 18;
       const trackGlowDurationMs = 7600;
       const primaryWaveDurationMs = 8800;
       const secondaryWaveDurationMs = 12600;
-      const warmupFlowDurationMs = 4000;
-      const warmupGlowDurationMs = 5400;
       const slotGap = progressParts.mainTotal > 1 ? 3 : 0;
       const slotRadius = svgHeight / 2;
       const trackGlowDelayMs = -(animationClockMs % trackGlowDurationMs);
       const primaryWaveDelayMs = -(animationClockMs % primaryWaveDurationMs);
       const secondaryWaveDelayMs = -(animationClockMs % secondaryWaveDurationMs);
-      const warmupFlowDelayMs = -(animationClockMs % warmupFlowDurationMs);
-      const warmupGlowDelayMs = -(animationClockMs % warmupGlowDurationMs);
       const slotWidth = (svgWidth - slotGap * Math.max(0, progressParts.mainTotal - 1)) / progressParts.mainTotal;
       const progressIdBase = `progress-${String(test.id ?? "current").replace(/[^a-z0-9_-]+/gi, "-")}`;
       const slotsClipId = `${progressIdBase}-slots`;
@@ -1201,7 +1361,6 @@
       const secondaryWaves = Array.from({ length: 7 }, (_, index) => `
                     <ellipse class="progress-track-wave-blob progress-track-wave-blob-secondary" cx="${130 + index * 150}" cy="9" rx="72" ry="8.5"></ellipse>
       `).join("");
-      const mainPercentage = Math.round((progressParts.mainCompleted / progressParts.mainTotal) * 100);
       const warmupRow = progressParts.includesWarmup
         ? `
           <div class="progress-warmup-row">
@@ -1220,7 +1379,7 @@
                 class="progress-warmup-fill"
                 data-progress-warmup-fill
                 data-test-id="${test.id}"
-                style="width:${(progressParts.warmupFill * 100).toFixed(2)}%;${active && progressVisual.completed === 0 ? `animation-delay:${warmupFlowDelayMs}ms, ${warmupGlowDelayMs}ms;` : ""}"
+                style="width:${(progressParts.warmupFill * 100).toFixed(2)}%;"
               ></div>
             </div>
             <strong>${progressParts.warmupCompleted} / 1</strong>
@@ -1229,12 +1388,13 @@
         : "";
 
       return `
-        <div class="progress-luxury ${active ? "is-active" : ""}">
+        <div class="progress-luxury ${active ? "is-active" : ""} ${tuning ? "is-tuning" : ""}">
           ${warmupRow}
           <div class="progress-luxury-head">
             <span>${stepsLabel}</span>
-            <strong>${progressParts.mainCompleted} / ${progressParts.mainTotal} (${mainPercentage}%)</strong>
+            <strong>${progressCounterText}</strong>
           </div>
+          ${tuning ? `<p class="progress-tuning-note">Скрытый PSI-прогон сбивает кеш Google. После него SpeedLab повторит целевой URL.</p>` : ""}
           <div
             class="progress-segment-track"
             data-progress-track
@@ -1291,26 +1451,22 @@
     }
 
     function renderTestDetail(details, runs) {
-      const { test, progress, metricStats, comparison, diagnostics, resourceOffenders, assetPayloadReport, optimizationReport, reportContext, queue } = details;
-      const insight = buildInsight(test, runs, comparison);
+      const { test, progress, metricStats, comparison, comparisonQuality, assetPayloadReport, reportContext, queue, baselineTests, runQuality } = details;
       const uniqueRuns = uniqueRunCount(runs);
       const runCount = getRequestedRunCount(test);
       const queuedText = test.status === "pending" && queue?.position
         ? `${UI.queuePosition}: ${queue.position}${queue.total ? ` / ${queue.total}` : ""}`
         : "";
-      const savedRunsText = test.runner === "local"
-        ? `${test.runsCompleted} / ${test.runsRequested} основных прогонов сохранено`
-        : `${test.runsCompleted} / ${test.runsRequested} запросов сохранено`;
-      const statusMetaText = [savedRunsText, queuedText, `${UI.uniqueResults}: ${uniqueRuns} / ${runCount}`]
+      const statusDetailText = test.runner === "local"
+        ? `${formatDevice(test.device)}, ${test.runsCompleted} / ${test.runsRequested} основных прогонов${test.warmup ? ", прогрев включен" : ""}`
+        : `${formatDevice(test.device)}, ${test.runsCompleted} / ${test.runsRequested} PSI-запросов`;
+      const usefulNoteText = isUsefulNote(test.note, test) ? `Комментарий: ${test.note}` : "";
+      const statusMetaText = [statusDetailText, `${UI.uniqueResults}: ${uniqueRuns} / ${runCount}`, usefulNoteText, queuedText]
         .filter(Boolean)
         .join(". ");
       const errorBanner = test.errorMessage
         ? `<p class="error-banner">${escapeHtml(test.errorMessage)}</p>`
         : "";
-      const runModeText = test.runner === "local"
-        ? `${formatDevice(test.device)}, ${test.runsRequested} \u043e\u0441\u043d\u043e\u0432\u043d\u044b\u0445 \u043f\u0440\u043e\u0433\u043e\u043d\u043e\u0432${test.warmup ? ", \u043f\u0440\u043e\u0433\u0440\u0435\u0432 \u0432\u043a\u043b\u044e\u0447\u0435\u043d" : ""}`
-        : `${formatDevice(test.device)}, ${test.runsRequested} PSI-\u0437\u0430\u043f\u0440\u043e\u0441\u043e\u0432`;
-
       setTopbarMeta({
         subtitle: `\u0422\u0435\u0441\u0442 #${test.id}`,
         context: test.url
@@ -1339,56 +1495,10 @@
           </div>
           ${renderSegmentedProgress(test, progress, runs)}
           ${errorBanner}
-          ${renderOverview(test, comparison, runs, runModeText)}
-          ${renderCompactSummary(test, comparison, uniqueRuns, runCount)}
-          ${renderStability(metricStats, runs)}
-          ${renderTechContext(reportContext, test)}
-          ${renderInsightBanner(insight)}
+          ${renderRunContextPanel(test, comparison, metricStats, runs, reportContext, uniqueRuns, runCount, runQuality)}
+          ${renderOverview(test, comparison, runs, baselineTests, comparisonQuality)}
         </section>
-        <section class="accordion-group">
-          <details open class="panel accordion">
-            <summary>План оптимизации</summary>
-            <div class="accordion-body">
-              ${renderOptimizationReport(optimizationReport)}
-            </div>
-          </details>
-          <details open class="panel accordion">
-            <summary>CSS/JS payload</summary>
-            <div class="accordion-body">
-              ${renderAssetPayloadReport(assetPayloadReport)}
-            </div>
-          </details>
-          <details open class="panel accordion">
-            <summary>${UI.diagnostics}</summary>
-            <div class="accordion-body">
-              ${renderDiagnostics(diagnostics)}
-            </div>
-          </details>
-          <details class="panel accordion">
-            <summary>\u0422\u044f\u0436\u0435\u043b\u044b\u0435 \u0440\u0435\u0441\u0443\u0440\u0441\u044b</summary>
-            <div class="accordion-body">
-              ${renderResourceOffenders(resourceOffenders)}
-            </div>
-          </details>
-          <details class="panel accordion">
-            <summary>${UI.medianMetrics}</summary>
-            <div class="accordion-body">
-              ${renderMetricStatsTable(metricStats)}
-            </div>
-          </details>
-          <details class="panel accordion">
-            <summary>${UI.comparePrev}</summary>
-            <div class="accordion-body">
-              ${renderComparisonTable(comparison)}
-            </div>
-          </details>
-          <details class="panel accordion">
-            <summary>${UI.individualRuns}</summary>
-            <div class="accordion-body">
-              ${renderRunsTable(runs)}
-            </div>
-          </details>
-        </section>
+        ${renderAssetPayloadReport(assetPayloadReport, test)}
       `;
     }
 

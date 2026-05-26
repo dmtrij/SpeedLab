@@ -13,6 +13,7 @@ process.env.PORT = "0";
 const chromeLauncher = require("chrome-launcher");
 const puppeteer = require("puppeteer-core");
 const db = require("../db");
+const runtimePaths = require("../runtime-paths");
 const { createApp } = require("../server");
 
 function seedCompletedTest({ score = 83, lcp = 4060 } = {}) {
@@ -25,14 +26,86 @@ function seedCompletedTest({ score = 83, lcp = 4060 } = {}) {
     note: "visual smoke"
   });
 
+  const reportDir = path.join(runtimePaths.resultsDir, `test-${testId}`);
+  fs.mkdirSync(reportDir, { recursive: true });
+
+  const rawReport = {
+    finalUrl: "https://example.com/",
+    audits: {
+      "network-requests": {
+        details: {
+          items: [
+            {
+              url: "https://example.com/wp-content/plugins/demo/frontend.css?ver=1",
+              transferSize: 52000,
+              resourceSize: 180000,
+              resourceType: "Stylesheet",
+              mimeType: "text/css",
+              priority: "VeryHigh",
+              networkRequestTime: 20,
+              networkEndTime: 280
+            },
+            {
+              url: "https://example.com/wp-content/plugins/demo/frontend.js?ver=1",
+              transferSize: 78000,
+              resourceSize: 220000,
+              resourceType: "Script",
+              mimeType: "application/javascript",
+              priority: "High",
+              networkRequestTime: 30,
+              networkEndTime: 420
+            },
+            {
+              url: "https://example.com/wp-content/uploads/hero.png",
+              transferSize: 420000,
+              resourceSize: 420000,
+              resourceType: "Image",
+              mimeType: "image/png",
+              priority: "High",
+              networkRequestTime: 60,
+              networkEndTime: 900
+            }
+          ]
+        }
+      },
+      "render-blocking-insight": {
+        score: 0,
+        details: {
+          items: [
+            {
+              url: "https://example.com/wp-content/plugins/demo/frontend.css?ver=1",
+              totalBytes: 52000,
+              wastedMs: 700
+            }
+          ]
+        }
+      },
+      "unused-javascript": {
+        score: 0,
+        details: {
+          items: [
+            {
+              url: "https://example.com/wp-content/plugins/demo/frontend.js?ver=1",
+              totalBytes: 220000,
+              wastedBytes: 90000,
+              wastedPercent: 41
+            }
+          ]
+        }
+      }
+    }
+  };
+
   [
     { runIndex: 1, score: 86, fcp: 2410, lcp: 3530, si: 3790, tbt: 0, cls: 0.026, ttfb: 100 },
     { runIndex: 2, score, fcp: 2410, lcp, si: 3820, tbt: 0, cls: 0.026, ttfb: 100 },
     { runIndex: 3, score, fcp: 2410, lcp, si: 3820, tbt: 0, cls: 0.026, ttfb: 100 }
   ].forEach((run) => {
+    const reportPath = path.join(reportDir, `run-${run.runIndex}.json`);
+    fs.writeFileSync(reportPath, JSON.stringify(rawReport), "utf8");
     db.insertRun({
       testId,
-      jsonPath: "",
+      jsonPath: `/results/test-${testId}/run-${run.runIndex}.json`,
       ...run
     });
   });
@@ -54,7 +127,7 @@ function seedCompletedTest({ score = 83, lcp = 4060 } = {}) {
   return testId;
 }
 
-test("visual smoke renders custom selects, run duplicates, and score gear", async (t) => {
+test("visual smoke renders report layout, resource inventory, and score gear", async (t) => {
   const chromePath = chromeLauncher.getChromePath();
   if (!chromePath) {
     t.skip("Chrome executable is not available for visual smoke.");
@@ -98,17 +171,68 @@ test("visual smoke renders custom selects, run duplicates, and score gear", asyn
       gearTeeth: document.querySelectorAll(".score-hero-gear-tooth").length,
       hasProgress: Boolean(document.querySelector(".progress-luxury")),
       hasStatusGrid: Boolean(document.querySelector(".status-overview-grid")),
+      hasRunQualitySummary: Boolean(document.querySelector(".run-quality-summary")),
+      hasComparisonQuality: Boolean(document.querySelector(".comparison-quality-note")),
+      hasPayloadReport: Boolean(document.querySelector(".payload-report")),
+      resourceShortcutCount: document.querySelectorAll(".resource-shortcut").length,
+      resourceShortcutHasLongText: Array.from(document.querySelectorAll(".resource-shortcut")).some((item) => Boolean(item.querySelector("small"))),
+      assetInventoryItems: document.querySelectorAll("[data-asset-item]").length,
+      assetInventoryListOverflow: getComputedStyle(document.querySelector(".asset-inventory-list")).overflowY,
+      actionRows: document.querySelectorAll(".asset-action-row").length,
+      oldActionCards: document.querySelectorAll(".asset-action-card").length,
+      actionResources: document.querySelectorAll(".asset-action-resource").length,
+      resourceAccordionCount: document.querySelectorAll(".accordion summary").length,
       screenshotAreaText: document.querySelector(".stage-card")?.textContent || ""
     }));
 
-    assert.equal(detailState.gearTeeth, 28);
+    assert.equal(detailState.gearTeeth, 20);
     assert.equal(detailState.hasProgress, true);
     assert.equal(detailState.hasStatusGrid, true);
+    assert.equal(detailState.hasRunQualitySummary, true);
+    assert.equal(detailState.hasComparisonQuality, true);
+    assert.equal(detailState.hasPayloadReport, true);
+    assert.ok(detailState.resourceShortcutCount >= 2);
+    assert.equal(detailState.resourceShortcutHasLongText, false);
+    assert.ok(detailState.assetInventoryItems >= 3);
+    assert.equal(detailState.assetInventoryListOverflow, "auto");
+    assert.ok(detailState.actionRows >= 2);
+    assert.equal(detailState.oldActionCards, 0);
+    assert.ok(detailState.actionResources >= 2);
+    assert.equal(detailState.resourceAccordionCount, 0);
     assert.ok(detailState.duplicateLabels.includes("дубликат #2"));
     assert.match(detailState.screenshotAreaText, /Уникальных результатов: 2 \/ 3/);
 
     const screenshot = await page.screenshot({ encoding: "base64" });
     assert.ok(screenshot.length > 1000);
+
+    for (const viewport of [
+      { width: 390, height: 920 },
+      { width: 768, height: 920 },
+      { width: 1365, height: 920 }
+    ]) {
+      await page.setViewport({ ...viewport, deviceScaleFactor: 1 });
+      await page.goto(`${baseUrl}/test/${currentTestId}`, { waitUntil: "networkidle0" });
+      await page.waitForSelector(".status-overview-grid");
+
+      const viewportState = await page.evaluate(() => {
+        const shell = document.querySelector(".result-shell");
+        return {
+          hasStatusGrid: Boolean(document.querySelector(".status-overview-grid")),
+          hasRunQualitySummary: Boolean(document.querySelector(".run-quality-summary")),
+          hasComparisonQuality: Boolean(document.querySelector(".comparison-quality-note")),
+          hasPayloadReport: Boolean(document.querySelector(".payload-report")),
+          shellWidth: shell ? Math.ceil(shell.getBoundingClientRect().width) : 0,
+          viewportWidth: window.innerWidth
+        };
+      });
+
+      assert.equal(viewportState.hasStatusGrid, true);
+      assert.equal(viewportState.hasRunQualitySummary, true);
+      assert.equal(viewportState.hasComparisonQuality, true);
+      assert.equal(viewportState.hasPayloadReport, true);
+      assert.ok(viewportState.shellWidth <= viewportState.viewportWidth);
+      assert.ok((await page.screenshot({ encoding: "base64" })).length > 1000);
+    }
   } finally {
     if (browser) {
       await browser.close();

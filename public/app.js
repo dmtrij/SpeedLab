@@ -29,7 +29,6 @@ const { requestJson } = window.SpeedLabApi.createApiClient({
 
 const {
   comparisonTone,
-  diagnosticGroup,
   formatDelta,
   formatDevice,
   formatMetric,
@@ -113,7 +112,6 @@ const { renderTestDetail } = window.SpeedLabTestView.createTestView({
   METRIC_LABELS,
   bytesLabel,
   comparisonTone,
-  diagnosticGroup,
   escapeHtml,
   formatDate,
   formatDelta,

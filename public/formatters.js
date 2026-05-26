@@ -89,18 +89,6 @@
       return "\u041b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0439 Lighthouse";
     }
 
-    function diagnosticGroup(id) {
-      const value = String(id || "");
-      if (value.includes("image") || value.includes("lcp")) return "\u0418\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f / LCP";
-      if (value.includes("css") || value.includes("render-blocking")) return "CSS";
-      if (value.includes("javascript") || value.includes("bootup") || value.includes("mainthread") || value.includes("reflow")) return "JS";
-      if (value.includes("font")) return "\u0428\u0440\u0438\u0444\u0442\u044b";
-      if (value.includes("cache")) return "\u041a\u0435\u0448";
-      if (value.includes("server")) return "\u0421\u0435\u0440\u0432\u0435\u0440";
-      if (value.includes("layout") || value.includes("cls") || value.includes("unsized")) return "\u0420\u0430\u0437\u043c\u0435\u0442\u043a\u0430 / CLS";
-      return "\u0414\u0440\u0443\u0433\u043e\u0435";
-    }
-
     function runnerClass(runner) {
       return runner === "psi" ? "runner-psi" : "runner-local";
     }
@@ -143,6 +131,7 @@
       const normalized = String(status).toLowerCase();
       if (normalized === "pending") return UI.pending;
       if (normalized === "warming up") return UI.warming;
+      if (normalized === "tuning") return "Наладка";
       if (normalized === "cancelling") return UI.cancelling;
       if (normalized === "completed") return UI.completed;
       if (normalized === "cancelled") return UI.cancelled;
@@ -165,6 +154,7 @@
       if (normalized === "cancelled") return "status-cancelled";
       if (normalized === "failed") return "status-failed";
       if (normalized === "pending") return "status-pending";
+      if (normalized === "tuning") return "status-tuning";
       return "status-running";
     }
 
@@ -175,7 +165,7 @@
 
     function isExecutionActive(status) {
       const normalized = String(status || "").toLowerCase();
-      return normalized === "warming up" || normalized === "cancelling" || /^run\s+\d+\s+of\s+\d+$/.test(normalized);
+      return normalized === "warming up" || normalized === "tuning" || normalized === "cancelling" || /^run\s+\d+\s+of\s+\d+$/.test(normalized);
     }
 
     function getTestMetric(test, metric) {
@@ -240,7 +230,6 @@
 
     return Object.freeze({
       comparisonTone,
-      diagnosticGroup,
       formatCls,
       formatDelta,
       formatDevice,
